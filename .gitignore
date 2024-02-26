@@ -18,7 +18,7 @@ temp_path_do_doc1
 offline_folder
 flagged_data_points
 .pytest_cache
-user_path
+user
 user_path_test
 build
 h2ogpt.egg-info
@@ -42,3 +42,11 @@ venv
 # Mac one click installer
 Tesseract-OCR/
 poppler/
+
+# Local 
+nltk_data/
+/locks
+sources_dir/
+urls_downloaded/
+llamacpp_path
+.DS_Store
