@@ -4,6 +4,7 @@ import functools
 import io
 import os
 import tempfile
+import traceback
 
 import filelock
 import numpy as np
@@ -11,9 +12,10 @@ import uuid
 import subprocess
 import time
 
+from src.enums import coqui_lock_name
 from src.tts_sentence_parsing import init_sentence_state, get_sentence, clean_sentence, detect_language
 from src.tts_utils import prepare_speech, get_no_audio, chunk_speed_change, combine_audios
-from src.utils import cuda_vis_check, makedirs
+from src.utils import cuda_vis_check, get_lock_file
 
 import torch
 
@@ -54,7 +56,7 @@ def get_xtt(model_name="tts_models/multilingual/multi-dataset/xtts_v2", deepspee
     supported_languages = config.languages
 
     model = Xtts.init_from_config(config)
-    with filelock.FileLock(get_lock_file()):
+    with filelock.FileLock(get_lock_file(coqui_lock_name)):
         model.load_checkpoint(
             config,
             checkpoint_dir=os.path.dirname(os.path.join(model_path, "model.pth")),
@@ -72,15 +74,6 @@ def get_xtt(model_name="tts_models/multilingual/multi-dataset/xtts_v2", deepspee
     return model, supported_languages
 
 
-def get_lock_file():
-    lock_type = "coqui"
-    base_path = os.path.join('locks', 'coqui_locks')
-    base_path = makedirs(base_path, exist_ok=True, tmp_ok=True, use_base=True)
-    lock_file = os.path.join(base_path, "%s.lock" % lock_type)
-    makedirs(os.path.dirname(lock_file))  # ensure made
-    return lock_file
-
-
 def get_latent(speaker_wav, voice_cleanup=False, model=None, gpt_cond_len=30, max_ref_length=60, sr=24000):
     if model is None:
         model, supported_languages = get_xtt()
@@ -94,7 +87,7 @@ def get_latent(speaker_wav, voice_cleanup=False, model=None, gpt_cond_len=30, ma
     # create as function as we can populate here with voice cleanup/filtering
     # note diffusion_conditioning not used on hifigan (default mode), it will be empty but need to pass it to model.inference
     # latent = (gpt_cond_latent, speaker_embedding)
-    with filelock.FileLock(get_lock_file()):
+    with filelock.FileLock(get_lock_file(coqui_lock_name)):
         latent = model.get_conditioning_latents(audio_path=speaker_wav, gpt_cond_len=gpt_cond_len,
                                                 max_ref_length=max_ref_length, load_sr=sr)
     return latent
@@ -134,7 +127,9 @@ def get_voice_streaming(prompt, language, latent, suffix="0", model=None, sr=240
             print(f"Restarted required due to exception: %s" % str(e), flush=True)
         else:
             print("Failed to generate wave: %s" % str(e))
+        traceback.print_exc()
     except Exception as e:
+        traceback.print_exc()
         print("Failed to generate wave: %s" % str(e))
 
 
@@ -210,7 +205,7 @@ def sentence_to_wave(sentence, supported_languages, tts_speed,
         for sentence in sentence_list:
             # have to lock entire sentence, model doesn't handle threads,
             # this is ok since usually have many sentences
-            with filelock.FileLock(get_lock_file()):
+            with filelock.FileLock(get_lock_file(coqui_lock_name)):
 
                 if any(c.isalnum() for c in sentence):
                     if language == "autodetect":
@@ -342,7 +337,7 @@ def predict_from_text(response, chatbot_role, language, roles_map, tts_speed,
         audio1, sentence, sentence_state = generate_speech_func(response, is_final=False)
         if sentence is not None:
             if return_prefix_every_yield and include_audio0:
-                audio_out = combine_audios([audio0], audio=audio1, channels=1, sample_width=2, sr=sr, expect_bytes=return_as_byte)
+                audio_out = combine_audios([audio0], audio=audio1, channels=1, sample_width=2, sr=sr, expect_bytes=return_as_byte, verbose=verbose)
             else:
                 audio_out = audio1
             if not return_dict:
@@ -354,7 +349,7 @@ def predict_from_text(response, chatbot_role, language, roles_map, tts_speed,
 
     audio1, sentence, sentence_state = generate_speech_func(response, is_final=True)
     if return_prefix_every_yield and include_audio0:
-        audio_out = combine_audios([audio0], audio=audio1, channels=1, sample_width=2, sr=sr, expect_bytes=return_as_byte)
+        audio_out = combine_audios([audio0], audio=audio1, channels=1, sample_width=2, sr=sr, expect_bytes=return_as_byte, verbose=verbose)
     else:
         audio_out = audio1
     if not return_dict:

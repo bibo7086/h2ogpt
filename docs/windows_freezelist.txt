@@ -90,9 +90,9 @@ fastapi==0.108.0
 feedparser==6.0.11
 ffmpeg==1.4
 ffmpy==0.3.1
-fiftyone==0.23.2
-fiftyone-brain==0.14.2
-fiftyone-db==1.1
+fiftyone==0.23.6
+fiftyone-brain==0.16.1
+fiftyone-db==1.1.1
 filelock==3.13.1
 filetype==1.2.0
 fire==0.5.0
@@ -167,17 +167,13 @@ langchain==0.0.354
 langchain-community==0.0.8
 langchain-core==0.1.6
 langchain-experimental==0.0.47
-langchain-google-genai==0.0.6
+langchain-google-genai==1.0.1
 langdetect==1.0.9
 langsmith==0.0.77
 layoutparser==0.3.4
 lazy_loader==0.3
 librosa==0.10.1
-# remoevd so can download directly
-# llama_cpp_python==0.2.26 # @
-https://github.com/jllllll/llama-cpp-python-cuBLAS-wheels/releases/download/cpu/llama_cpp_python-0.2.26+cpuavx2-cp310-cp310-win_amd64.whl
-# llama_cpp_python_cuda==0.2.26 # @
-https://github.com/jllllll/llama-cpp-python-cuBLAS-wheels/releases/download/textgen-webui/llama_cpp_python_cuda-0.2.26+cu118avx-cp310-cp310-win_amd64.whl
+llama_cpp_python==0.2.76
 llvmlite==0.41.1
 lm-dataformat==0.0.20
 lm_eval==0.4.0
@@ -242,7 +238,7 @@ packaging==23.2
 pandas==2.0.2
 pathvalidate==3.2.0
 pdf2image==1.17.0
-pdfminer.six==20221105
+pdfminer.six==20231228
 pdfplumber==0.10.3
 peft==0.7.1
 Pillow==9.5.0
@@ -314,6 +310,7 @@ pytz==2023.3.post1
 pywin32==306
 PyYAML==6.0.1
 pyzstd==0.15.9
+qdrant-client==1.8.0
 rapidfuzz==3.6.1
 rarfile==4.1
 referencing==0.32.1
@@ -379,7 +376,7 @@ tifffile==2023.12.9
 tiktoken==0.5.2
 timm==0.9.12
 tinycss2==1.2.1 # @ file:///home/conda/feedstock_root/build_artifacts/tinycss2_1666100256010/work
-tokenizers==0.15.0
+tokenizers==0.15.2
 toml==0.10.2
 tomli==2.0.1
 toolz==0.12.0

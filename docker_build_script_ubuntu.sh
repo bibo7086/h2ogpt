@@ -28,10 +28,21 @@ apt-get update && apt-get install -y \
 apt-get upgrade -y
 
 # Install conda
-wget https://repo.anaconda.com/miniconda/Miniconda3-py310_23.1.0-1-Linux-x86_64.sh && \
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && \
     mkdir -p /h2ogpt_conda && \
-    bash ./Miniconda3-py310_23.1.0-1-Linux-x86_64.sh -b -u -p /h2ogpt_conda && \
-    conda install python=3.10 pygobject weasyprint -c conda-forge -y
+    bash ./Miniconda3-latest-Linux-x86_64.sh -b -u -p /h2ogpt_conda && \
+    conda update -n base conda && \
+    source /h2ogpt_conda/etc/profile.d/conda.sh && \
+    conda create -n h2ogpt -y && \
+    conda activate h2ogpt && \
+    conda install python=3.10 pygobject weasyprint -c conda-forge -y && \
+    echo "h2oGPT conda env: $CONDA_DEFAULT_ENV"
+
+# if building for CPU, would remove CMAKE_ARGS and avoid GPU image as base image
+# Choose llama_cpp_python ARGS for your system according to [llama_cpp_python backend documentation](https://github.com/abetlen/llama-cpp-python?tab=readme-ov-file#supported-backends), e.g. for CUDA:
+export LLAMA_CUBLAS=1
+export CMAKE_ARGS="-DLLAMA_CUBLAS=on -DCMAKE_CUDA_ARCHITECTURES=all"
+export FORCE_CMAKE=1
 
 bash docs/linux_install.sh
 
@@ -75,31 +86,29 @@ print('Done!')
 ############################################################
 # vllm server
 export VLLM_CACHE=/workspace/.vllm_cache
-cd /h2ogpt_conda
-python -m venv vllm_env --system-site-packages
+conda create -n vllm -y
+source /h2ogpt_conda/etc/profile.d/conda.sh
+conda activate vllm
+conda install python=3.10 -y
+echo "vLLM conda env: $CONDA_DEFAULT_ENV"
+
 # gputil is for rayWorker in vllm to run as non-root
 # below required outside docker:
 # apt-get install libnccl2
-#/h2ogpt_conda/vllm_env/bin/python -m pip install https://h2o-release.s3.amazonaws.com/h2ogpt/vllm-0.2.7%2Bcu118-cp310-cp310-linux_x86_64.whl
-#/h2ogpt_conda/vllm_env/bin/python -m pip install https://github.com/vllm-project/vllm/releases/download/v0.2.7/vllm-0.2.7+cu118-cp310-cp310-manylinux1_x86_64.whl
-#/h2ogpt_conda/vllm_env/bin/python -m pip install vllm
+python -m pip install vllm==0.4.0.post1
+python -m pip install gputil==1.4.0 hf_transfer==0.1.6
+python -m pip install flash-attn==2.5.6 --no-build-isolation --no-deps --no-cache-dir
 
-/h2ogpt_conda/vllm_env/bin/python -m pip install ray pandas gputil==1.4.0 fschat==0.2.34 flash-attn==2.4.2 autoawq==0.1.8 uvicorn[standard] hf_transfer==0.1.5
-/h2ogpt_conda/vllm_env/bin/python -m pip install https://h2o-release.s3.amazonaws.com/h2ogpt/megablocks-0.5.1-cp310-cp310-linux_x86_64.whl
-/h2ogpt_conda/vllm_env/bin/python -m pip install https://h2o-release.s3.amazonaws.com/h2ogpt/triton-2.2.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-/h2ogpt_conda/vllm_env/bin/python -m pip install https://h2o-release.s3.amazonaws.com/h2ogpt/mosaicml_turbo-0.0.9-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-# below has issue that compiled on A100, doesn't seem to work on V100, go back to vllm's own build
-#/h2ogpt_conda/vllm_env/bin/python -m pip install https://h2o-release.s3.amazonaws.com/h2ogpt/vllm-0.3.0-cp310-cp310-manylinux1_x86_64.whl
-/h2ogpt_conda/vllm_env/bin/python -m pip install vllm==0.3.2
+# pip install hf_transfer
+# pip install tiktoken accelerate flash_attn
 mkdir $VLLM_CACHE
 chmod -R a+rwx /h2ogpt_conda
 
 # Make sure old python location works in case using scripts from old documentation
-mkdir -p /h2ogpt_conda/envs/vllm/bin
-ln -s /h2ogpt_conda/vllm_env/bin/python3.10 /h2ogpt_conda/envs/vllm/bin/python3.10
+mkdir -p /h2ogpt_conda/vllm_env/bin/
+ln -s /h2ogpt_conda/envs/vllm/bin/python3.10 /h2ogpt_conda/vllm_env/bin/python3.10
 
 # Track build info
-cd /workspace && make build_info.txt git_hash.txt
 cp /workspace/build_info.txt /build_info.txt
 cp /workspace/git_hash.txt /git_hash.txt
 
@@ -109,3 +118,23 @@ chmod -R a+rwx /workspace/save
 # Cleanup
 rm -rf /workspace/Miniconda3-py310_23.1.0-1-Linux-x86_64.sh
 rm -rf /workspace/.cache/pip
+rm -rf /h2ogpt_conda/pkgs
+rm -rf /workspace/spaces
+rm -rf /workspace/benchmarks
+rm -rf /workspace/data
+rm -rf /workspace/cloud
+rm -rf /workspace/docs
+rm -rf /workspace/helm
+rm -rf /workspace/notebooks
+rm -rf /workspace/papers
+
+# Hotswap vulnerable dependencies
+wget https://s3.amazonaws.com/artifacts.h2o.ai/deps/h2ogpt/ubuntu20.04/apparmor_4.0.0~alpha2-0ubuntu5_amd64.deb
+wget https://s3.amazonaws.com/artifacts.h2o.ai/deps/h2ogpt/ubuntu20.04/libapparmor1_4.0.0~alpha2-0ubuntu5_amd64.deb
+dpkg -i libapparmor1_4.0.0~alpha2-0ubuntu5_amd64.deb
+dpkg -i apparmor_4.0.0~alpha2-0ubuntu5_amd64.deb
+rm -rf libapparmor1_4*.deb apparmor_4*.deb
+
+wget https://s3.amazonaws.com/artifacts.h2o.ai/deps/h2ogpt/ubuntu20.04/libarchive13_3.6.2-1ubuntu1_amd64.deb
+dpkg -i libarchive13_3.6.2-1ubuntu1_amd64.deb
+rm -rf libarchive13_3.6.2-1ubuntu1_amd64.deb

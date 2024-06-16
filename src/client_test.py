@@ -82,6 +82,7 @@ def get_args(prompt, prompt_type=None, chat=False, stream_output=False,
              version=None,
              h2ogpt_key=None,
              visible_models=None,
+             visible_image_models=None,
              system_prompt='',  # default of no system prompt triggered by empty string
              add_search_to_context=False,
              chat_conversation=None,
@@ -91,9 +92,10 @@ def get_args(prompt, prompt_type=None, chat=False, stream_output=False,
              document_source_substrings_op='and',
              document_content_substrings=[],
              document_content_substrings_op='and',
-             max_time=20,
+             max_time=20,  # nominally want test to complete, not exercise timeout code (llama.cpp gets stuck behind file lock if prior generation is still going)
              repetition_penalty=1.0,
              do_sample=True,
+             seed=0,
              metadata_in_context=[],
              ):
     from collections import OrderedDict
@@ -106,7 +108,7 @@ def get_args(prompt, prompt_type=None, chat=False, stream_output=False,
                          prompt_type=prompt_type,
                          prompt_dict=prompt_dict,
                          temperature=0.1,
-                         top_p=0.75,
+                         top_p=1.0,
                          top_k=40,
                          penalty_alpha=0,
                          num_beams=1,
@@ -117,6 +119,7 @@ def get_args(prompt, prompt_type=None, chat=False, stream_output=False,
                          repetition_penalty=repetition_penalty,
                          num_return_sequences=1,
                          do_sample=do_sample,
+                         seed=seed,
                          chat=chat,
                          instruction_nochat=prompt if not chat else '',
                          iinput_nochat='',  # only for chat=False
@@ -138,6 +141,14 @@ def get_args(prompt, prompt_type=None, chat=False, stream_output=False,
                          pre_prompt_summary=None,
                          prompt_summary=None,
                          hyde_llm_prompt=None,
+
+                         user_prompt_for_fake_system_prompt=None,
+                         json_object_prompt=None,
+                         json_object_prompt_simpler=None,
+                         json_code_prompt=None,
+                         json_code_prompt_if_no_schema=None,
+                         json_schema_instruction=None,
+
                          system_prompt=system_prompt,
                          image_audio_loaders=None,
                          pdf_loaders=None,
@@ -146,6 +157,7 @@ def get_args(prompt, prompt_type=None, chat=False, stream_output=False,
                          extract_frames=None,
                          llava_prompt=None,
                          visible_models=visible_models,
+                         visible_image_models=visible_image_models,
                          h2ogpt_key=h2ogpt_key,
                          add_search_to_context=add_search_to_context,
                          chat_conversation=chat_conversation,
@@ -169,6 +181,24 @@ def get_args(prompt, prompt_type=None, chat=False, stream_output=False,
 
                          image_file=None,
                          image_control=None,
+                         images_num_max=None,
+                         image_resolution=None,
+                         image_format=None,
+                         rotate_align_resize_image=None,
+                         video_frame_period=None,
+                         image_batch_image_prompt=None,
+                         image_batch_final_prompt=None,
+                         image_batch_stream=None,
+                         visible_vision_models=None,
+                         video_file=None,
+
+                         response_format=None,
+                         guided_json=None,
+                         guided_regex=None,
+                         guided_choice=None,
+                         guided_grammar=None,
+                         guided_whitespace_pattern=None,
+
                          )
     diff = 0
     from evaluate_params import eval_func_param_names
@@ -326,7 +356,7 @@ def run_client_nochat_api_lean_morestuff(prompt, prompt_type='human_bot', max_ne
         stream_output=False,
         prompt_type=prompt_type,
         temperature=0.1,
-        top_p=0.75,
+        top_p=1.0,
         top_k=40,
         penalty_alpha=0,
         num_beams=1,
@@ -337,6 +367,7 @@ def run_client_nochat_api_lean_morestuff(prompt, prompt_type='human_bot', max_ne
         repetition_penalty=1.0,
         num_return_sequences=1,
         do_sample=True,
+        seed=0,
         chat=False,
         instruction_nochat=prompt,
         iinput_nochat='',
@@ -410,7 +441,9 @@ def run_client_chat(prompt='',
                     top_k_docs=3,
                     max_time=20,
                     repetition_penalty=1.0,
-                    do_sample=True):
+                    do_sample=True,
+                    seed=0,
+                    ):
     client = get_client(serialize=False)
 
     kwargs, args = get_args(prompt, prompt_type, chat=True, stream_output=stream_output,
@@ -431,19 +464,21 @@ def run_client_chat(prompt='',
                             top_k_docs=top_k_docs,
                             max_time=max_time,
                             repetition_penalty=repetition_penalty,
-                            do_sample=do_sample)
+                            do_sample=do_sample,
+                            seed=seed,
+                            )
     return run_client(client, prompt, args, kwargs)
 
 
 def run_client(client, prompt, args, kwargs, do_md_to_text=True, verbose=False):
     if is_gradio_version4:
         kwargs['answer_with_sources'] = True
-        kwargs['show_accordions'] = True
+        kwargs['sources_show_text_in_accordion'] = True
         kwargs['append_sources_to_answer'] = True
         kwargs['append_sources_to_chat'] = False
         kwargs['show_link_in_sources'] = True
         res_dict, client = run_client_gen(client, kwargs, do_md_to_text=do_md_to_text)
-        res_dict['response'] += str(res_dict['sources_str'])
+        res_dict['response'] += str(res_dict.get('sources_str', ''))
         return res_dict, client
         # FIXME: https://github.com/gradio-app/gradio/issues/6592
 

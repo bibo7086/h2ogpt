@@ -17,6 +17,11 @@ h2ogpt:
     repository:
     tag:
     pullPolicy:
+  
+  podAffinity:
+  # -- Set hostname and zone to true for pod affinity rules based on hostname and zone.
+  # hostname:
+  # zone:
 
   storage:
     size: 128Gi
@@ -63,9 +68,9 @@ h2ogpt:
 
   podSecurityContext:
     runAsNonRoot: true
-    runAsUser: 1000
-    runAsGroup: 1000
-    fsGroup: 1000
+    runAsUser: 
+    runAsGroup: 
+    fsGroup: 
 
   securityContext:
     runAsNonRoot: true
@@ -94,6 +99,11 @@ tgi:
     repository: ghcr.io/huggingface/text-generation-inference
     tag: 0.9.3
     pullPolicy: IfNotPresent
+
+  podAffinity:
+    # -- Set hostname and zone to true for pod affinity rules based on hostname and zone.
+    # hostname:
+    # zone:
 
   storage:
     size: 512Gi
@@ -133,6 +143,11 @@ vllm:
     tag:
     pullPolicy: IfNotPresent
 
+  podAffinity:
+    # -- Set hostname and zone to true for pod affinity rules based on hostname and zone.
+    # hostname:
+    # zone:
+
   imagePullSecrets:
 
   storage:
@@ -162,9 +177,9 @@ vllm:
 
   podSecurityContext:
     runAsNonRoot: true
-    runAsUser: 1000
-    runAsGroup: 1000
-    fsGroup: 1000
+    runAsUser: 
+    runAsGroup: 
+    fsGroup: 
 
   securityContext:
     runAsNonRoot: true

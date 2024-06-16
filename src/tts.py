@@ -1,6 +1,7 @@
 from __future__ import annotations
 import base64
-import io
+from pkg_resources import resource_filename
+import os
 import time
 from io import BytesIO
 import numpy as np
@@ -14,11 +15,11 @@ from src.tts_sentence_parsing import init_sentence_state, get_sentence
 from src.tts_utils import prepare_speech, get_no_audio, chunk_speed_change, combine_audios
 
 speaker_embeddings = {
-    "BDL": "spkemb/cmu_us_bdl_arctic-wav-arctic_a0009.npy",
-    "CLB": "spkemb/cmu_us_clb_arctic-wav-arctic_a0144.npy",
-    "KSP": "spkemb/cmu_us_ksp_arctic-wav-arctic_b0087.npy",
-    "RMS": "spkemb/cmu_us_rms_arctic-wav-arctic_b0353.npy",
-    "SLT": "spkemb/cmu_us_slt_arctic-wav-arctic_a0508.npy",
+    "BDL": resource_filename('h2ogpt', "spkemb/cmu_us_bdl_arctic-wav-arctic_a0009.npy"),
+    "CLB": resource_filename('h2ogpt', "spkemb/cmu_us_clb_arctic-wav-arctic_a0144.npy"),
+    "KSP": resource_filename('h2ogpt', "spkemb/cmu_us_ksp_arctic-wav-arctic_b0087.npy"),
+    "RMS": resource_filename('h2ogpt', "spkemb/cmu_us_rms_arctic-wav-arctic_b0353.npy"),
+    "SLT": resource_filename('h2ogpt', "spkemb/cmu_us_slt_arctic-wav-arctic_a0508.npy"),
 }
 
 
@@ -143,12 +144,12 @@ def generate_speech(response, speaker,
             print("begin _predict_from_text")
         audio = _predict_from_text(sentence, speaker, processor=processor, model=model, vocoder=vocoder,
                                    speaker_embedding=speaker_embedding, return_as_byte=return_as_byte, sr=sr,
-                                   tts_speed=tts_speed)
+                                   tts_speed=tts_speed, verbose=verbose)
         if verbose:
             print("end _predict_from_text")
     else:
-        if verbose:
-            print("no audio")
+        #if verbose:
+        #    print("no audio")
         no_audio = get_no_audio(sr=sr, return_as_byte=return_as_byte)
         if return_gradio:
             import gradio as gr
@@ -185,10 +186,10 @@ def predict_from_text(text, speaker, tts_speed, processor=None, model=None, voco
             audio = _predict_from_text(sentence, speaker, processor=processor, model=model, vocoder=vocoder,
                                        speaker_embedding=speaker_embedding,
                                        return_as_byte=return_as_byte,
-                                       tts_speed=tts_speed)
+                                       tts_speed=tts_speed, verbose=verbose)
             if return_prefix_every_yield and include_audio0:
                 audio_out = combine_audios([audio0], audio=audio, channels=1, sample_width=2, sr=sr,
-                                           expect_bytes=return_as_byte)
+                                           expect_bytes=return_as_byte, verbose=verbose)
             else:
                 audio_out = audio
             if not return_dict:
@@ -203,10 +204,10 @@ def predict_from_text(text, speaker, tts_speed, processor=None, model=None, voco
     if sentence:
         audio = _predict_from_text(sentence, speaker, processor=processor, model=model, vocoder=vocoder,
                                    speaker_embedding=speaker_embedding,
-                                   return_as_byte=return_as_byte)
+                                   return_as_byte=return_as_byte, verbose=verbose)
         if return_prefix_every_yield and include_audio0:
             audio_out = combine_audios([audio0], audio=audio, channels=1, sample_width=2, sr=sr,
-                                       expect_bytes=return_as_byte)
+                                       expect_bytes=return_as_byte, verbose=verbose)
         else:
             audio_out = audio
         if not return_dict:
@@ -239,7 +240,9 @@ def get_speaker_embedding(speaker, device):
 
 
 def _predict_from_text(text, speaker, processor=None, model=None, vocoder=None, speaker_embedding=None,
-                       return_as_byte=True, sr=16000, tts_speed=1.0):
+                       return_as_byte=True, sr=16000, tts_speed=1.0, verbose=False):
+    if verbose:
+        print("begin _predict_from_text")
     if len(text.strip()) == 0:
         return get_no_audio(sr=sr, return_as_byte=return_as_byte)
     if speaker_embedding is None:
@@ -256,6 +259,8 @@ def _predict_from_text(text, speaker, processor=None, model=None, vocoder=None, 
     chunk = (chunk * 32767).astype(np.int16)
     chunk = chunk_speed_change(chunk, sr, tts_speed=tts_speed)
 
+    if verbose:
+        print("end _predict_from_text")
     if return_as_byte:
         return chunk.tobytes()
     else:

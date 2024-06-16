@@ -8,26 +8,33 @@ from utils import clear_torch_cache, NullContext, get_kwargs
 
 
 def run_cli(  # for local function:
-        base_model=None, lora_weights=None, inference_server=None, regenerate_clients=None, regenerate_gradio_clients=None,
+        base_model=None, lora_weights=None, inference_server=None, regenerate_clients=None,
+        regenerate_gradio_clients=None,
         debug=None,
         examples=None, memory_restriction_level=None,
         # evaluate kwargs
         n_jobs=None, llamacpp_path=None, llamacpp_dict=None, exllama_dict=None, gptq_dict=None, attention_sinks=None,
-        sink_dict=None, truncation_generation=None, hf_model_dict=None, load_exllama=None,
+        sink_dict=None, truncation_generation=None,
+        hf_model_dict=None,
+        force_seq2seq_type=None, force_t5_type=None,
+        load_exllama=None,
 
         use_pymupdf=None,
         use_unstructured_pdf=None,
         use_pypdf=None,
         enable_pdf_ocr=None,
         enable_pdf_doctr=None,
-        enable_imagegen_high_sd=None,
+        enable_image=None,
+        visible_image_models=None,
+
         try_pdf_as_html=None,
         # for some evaluate args
-        stream_output=None, async_output=None, num_async=None,
+        load_awq='',
+        stream_output=None, async_output=None, num_async=None, stream_map=None,
         prompt_type=None, prompt_dict=None, system_prompt=None,
         temperature=None, top_p=None, top_k=None, penalty_alpha=None, num_beams=None,
         max_new_tokens=None, min_new_tokens=None, early_stopping=None, max_time=None, repetition_penalty=None,
-        num_return_sequences=None, do_sample=None, chat=None,
+        num_return_sequences=None, do_sample=None, seed=None, chat=None,
         langchain_mode=None, langchain_action=None, langchain_agents=None,
         document_subset=None, document_choice=None,
         document_source_substrings=None,
@@ -37,11 +44,22 @@ def run_cli(  # for local function:
         top_k_docs=None, chunk=None, chunk_size=None,
         pre_prompt_query=None, prompt_query=None,
         pre_prompt_summary=None, prompt_summary=None, hyde_llm_prompt=None,
+
+        user_prompt_for_fake_system_prompt=None,
+        json_object_prompt=None,
+        json_object_prompt_simpler=None,
+        json_code_prompt=None,
+        json_code_prompt_if_no_schema=None,
+        json_schema_instruction=None,
+
         image_audio_loaders=None,
         pdf_loaders=None,
         url_loaders=None,
         jq_schema=None,
         extract_frames=None,
+        extract_frames0=None,
+        guided_whitespace_pattern0=None,
+        metadata_in_context0=None,
         llava_prompt=None,
         visible_models=None,
         h2ogpt_key=None,
@@ -58,6 +76,7 @@ def run_cli(  # for local function:
         hyde_template=None,
         hyde_show_only_final=None,
         hyde_show_intermediate_in_accordion=None,
+        map_reduce_show_intermediate_in_accordion=None,
         doc_json_mode=None,
         metadata_in_context=None,
         chatbot_role=None,
@@ -66,6 +85,23 @@ def run_cli(  # for local function:
         tts_speed=None,
         image_file=None,
         image_control=None,
+        images_num_max=None,
+        image_resolution=None,
+        image_format=None,
+        rotate_align_resize_image=None,
+        video_frame_period=None,
+        image_batch_image_prompt=None,
+        image_batch_final_prompt=None,
+        image_batch_stream=None,
+        visible_vision_models=None,
+        video_file=None,
+
+        response_format=None,
+        guided_json=None,
+        guided_regex=None,
+        guided_choice=None,
+        guided_grammar=None,
+        guided_whitespace_pattern=None,
 
         # for evaluate kwargs
         captions_model=None,
@@ -73,9 +109,7 @@ def run_cli(  # for local function:
         doctr_loader=None,
         pix2struct_loader=None,
         llava_model=None,
-        image_gen_loader=None,
-        image_gen_loader_high=None,
-        image_change_loader=None,
+        image_model_dict=None,
 
         asr_model=None,
         asr_loader=None,
@@ -88,6 +122,8 @@ def run_cli(  # for local function:
         allow_chat_system_prompt=None,
         src_lang=None, tgt_lang=None, concurrency_count=None, save_dir=None, sanitize_bot_response=None,
         model_state0=None,
+        use_auth_token=None,
+        trust_remote_code=None,
         score_model_state0=None,
         max_max_new_tokens=None,
         is_public=None,
@@ -96,12 +132,12 @@ def run_cli(  # for local function:
         my_db_state0=None, selection_docs_state0=None, dbs=None, langchain_modes=None, langchain_mode_paths=None,
         detect_user_path_changes_every_query=None,
         use_openai_embedding=None, use_openai_model=None,
-        hf_embedding_model=None, migrate_embedding_model=None, auto_migrate_db=None,
+        hf_embedding_model=None, migrate_embedding_model=None,
         cut_distance=None,
         answer_with_sources=None,
         append_sources_to_answer=None,
         append_sources_to_chat=None,
-        show_accordions=None,
+        sources_show_text_in_accordion=None,
         top_k_docs_max_show=None,
         show_link_in_sources=None,
         langchain_instruct_mode=None,
@@ -124,7 +160,7 @@ def run_cli(  # for local function:
     logging.getLogger("transformers").setLevel(logging.ERROR)
 
     from_ui = False
-    check_locals(**locals())
+    check_locals(**locals().copy())
 
     score_model = ""  # FIXME: For now, so user doesn't have to pass
     verifier_server = ""  # FIXME: For now, so user doesn't have to pass
@@ -139,17 +175,19 @@ def run_cli(  # for local function:
         roles_state0 = None
         args = (None, my_db_state0, selection_docs_state0, requests_state0, roles_state0)
         assert len(args) == len(input_args_list)
-        fun = partial(evaluate,
-                      *args,
-                      **get_kwargs(evaluate, exclude_names=input_args_list + eval_func_param_names,
-                                   **locals()))
-
         example1 = examples[-1]  # pick reference example
         all_generations = []
+        all_sources = []
         if not context:
             context = ''
         if chat_conversation is None:
             chat_conversation = []
+
+        fun = partial(evaluate,
+                      *args,
+                      **get_kwargs(evaluate, exclude_names=input_args_list + eval_func_param_names,
+                                   **locals().copy()))
+
         while True:
             clear_torch_cache(allow_skip=True)
             instruction = input("\nEnter an instruction: ")
@@ -165,8 +203,8 @@ def run_cli(  # for local function:
 
             # grab other parameters, like langchain_mode
             for k in eval_func_param_names:
-                if k in locals():
-                    eval_vars[eval_func_param_names.index(k)] = locals()[k]
+                if k in locals().copy():
+                    eval_vars[eval_func_param_names.index(k)] = locals().copy()[k]
 
             gener = fun(*tuple(eval_vars))
             outr = ''
@@ -189,9 +227,10 @@ def run_cli(  # for local function:
                         # show sources at end after model itself had streamed to std rest of response
                         print('\n\n' + str(sources), flush=True)
             all_generations.append(outr + '\n')
+            all_sources.append(sources)
             if not cli_loop:
                 break
             if add_chat_history_to_context:
                 # for CLI keep track of conversation
                 chat_conversation.extend([[instruction, outr]])
-    return all_generations
+    return all_generations, all_sources

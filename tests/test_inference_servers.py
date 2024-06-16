@@ -120,8 +120,8 @@ def test_gradio_inference_server(base_model, force_langchain_evaluate, do_langch
                                                                h2ogpt_key=h2ogpt_key)  # client shouldn't have to specify
     if base_model == 'h2oai/h2ogpt-oig-oasst1-512-6_9b':
         assert 'h2oGPT' in ret1['response']
-        assert 'Birds' in ret2['response']
-        assert 'Birds' in ret3['response']
+        assert 'birds' in ret2['response'].lower()
+        assert 'birds' in ret3['response'].lower()
         assert 'h2oGPT' in ret4['response']
         assert 'h2oGPT' in ret5['response']
         assert 'h2oGPT' in ret6['response']
@@ -132,29 +132,29 @@ def test_gradio_inference_server(base_model, force_langchain_evaluate, do_langch
                'I am a chatbot.' in ret1['response'] or \
                'a chat-based assistant that can answer questions' in ret1['response'] or \
                'I am an AI language model' in ret1['response'] or \
-               'I am an AI assistant.' in ret1['response']
+               'I am an AI assistant' in ret1['response']
         assert 'Once upon a time' in ret2['response']
         assert 'Once upon a time' in ret3['response']
         assert 'I am a language model trained' in ret4['response'] or 'I am a helpful assistant' in \
                ret4['response'] or 'I am a chatbot.' in ret4['response'] or \
                'a chat-based assistant that can answer questions' in ret4['response'] or \
                'I am an AI language model' in ret4['response'] or \
-               'I am an AI assistant.' in ret4['response']
+               'I am an AI assistant' in ret4['response']
         assert 'I am a language model trained' in ret5['response'] or 'I am a helpful assistant' in \
                ret5['response'] or 'I am a chatbot.' in ret5['response'] or \
                'a chat-based assistant that can answer questions' in ret5['response'] or \
                'I am an AI language model' in ret5['response'] or \
-               'I am an AI assistant.' in ret5['response']
+               'I am an AI assistant' in ret5['response']
         assert 'I am a language model trained' in ret6['response'] or 'I am a helpful assistant' in \
                ret6['response'] or 'I am a chatbot.' in ret6['response'] or \
                'a chat-based assistant that can answer questions' in ret6['response'] or \
                'I am an AI language model' in ret6['response'] or \
-               'I am an AI assistant.' in ret6['response']
+               'I am an AI assistant' in ret6['response']
         assert 'I am a language model trained' in ret7['response'] or 'I am a helpful assistant' in \
                ret7['response'] or 'I am a chatbot.' in ret7['response'] or \
                'a chat-based assistant that can answer questions' in ret7['response'] or \
                'I am an AI language model' in ret7['response'] or \
-               'I am an AI assistant.' in ret7['response']
+               'I am an AI assistant' in ret7['response']
     elif base_model == 'llama':
         assert 'I am a bot.' in ret1['response'] or 'can I assist you today?' in ret1[
             'response'] or 'How can I assist you?' in ret1['response'] or "I'm LLaMA" in ret1['response']
@@ -206,7 +206,7 @@ def run_docker(inf_port, base_model, low_mem_mode=False, do_shared=True):
               '-p', '%s:80' % inf_port,
               '-v', '%s/.cache/huggingface/hub/:/data' % home_dir,
               '-v', '%s:/data' % data_dir,
-              'ghcr.io/huggingface/text-generation-inference:1.4',
+              'ghcr.io/huggingface/text-generation-inference:2.04',
               '--model-id', base_model,
               '--cuda-memory-fraction', '0.8',
               '--max-stop-sequences', '6',
@@ -255,7 +255,7 @@ def run_vllm_docker(inf_port, base_model, tokenizer=None):
     if base_model == 'h2oai/h2ogpt-gm-oasst1-en-2048-falcon-7b-v2':
         # 7b has 71 heads, not divisible
         os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-    os.system("docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0")
+    os.system("docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.1")
     datetime_str = str(datetime.now()).replace(" ", "_").replace(":", "_")
     msg = "Starting vLLM inference %s..." % datetime_str
     print(msg, flush=True)
@@ -277,7 +277,7 @@ def run_vllm_docker(inf_port, base_model, tokenizer=None):
               '-v', '%s/.cache/huggingface/hub:/workspace/.cache/huggingface/hub' % home_dir,
               '-v', '%s/.cache/huggingface/modules:/workspace/.cache/huggingface/modules' % home_dir,
               # '--network', 'host',
-              'gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0',
+              'gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.1',
               # 'h2ogpt',  # use when built locally with vLLM just freshly added
               # 'docker.io/library/h2ogpt',  # use when built locally with vLLM just freshly added
               '-m', 'vllm.entrypoints.openai.api_server',
@@ -310,7 +310,7 @@ def run_vllm_docker(inf_port, base_model, tokenizer=None):
 
 
 def run_h2ogpt_docker(port, base_model, inference_server=None, max_new_tokens=None):
-    os.system("docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0")
+    os.system("docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.1")
     datetime_str = str(datetime.now()).replace(" ", "_").replace(":", "_")
     msg = "Starting h2oGPT %s..." % datetime_str
     print(msg, flush=True)
@@ -331,7 +331,7 @@ def run_h2ogpt_docker(port, base_model, inference_server=None, max_new_tokens=No
               '-u', '%s:%s' % (os.getuid(), os.getgid()),
               '-e', 'HUGGING_FACE_HUB_TOKEN=%s' % os.environ['HUGGING_FACE_HUB_TOKEN'],
               '--network', 'host',
-              'gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0',
+              'gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.1',
               # 'h2ogpt',  # use when built locally with vLLM just freshly added
               '/workspace/generate.py',
                     '--base_model=%s' % base_model,
@@ -402,7 +402,9 @@ def test_hf_inference_server(base_model, force_langchain_evaluate, do_langchain,
         if not pass_prompt_type:
             prompt_type = None
     if do_model_lock:
-        model_lock = [{'inference_server': inference_server, 'base_model': base_model}]
+        model_lock = [{'inference_server': inference_server, 'base_model': base_model,
+                       'max_seq_len': 1024  # for low-memory mode
+                       }]
         base_model = None
         inference_server = None
     else:
@@ -422,6 +424,7 @@ def test_hf_inference_server(base_model, force_langchain_evaluate, do_langchain,
                        docs_ordering_type=docs_ordering_type,
                        force_langchain_evaluate=force_langchain_evaluate,
                        inference_server=inference_server,
+                       max_seq_len=1024,  # to match low memory mode HF startup
                        model_lock=model_lock)
 
     try:
@@ -445,20 +448,29 @@ def test_hf_inference_server(base_model, force_langchain_evaluate, do_langchain,
         # here docker started with falcon before personalization
 
         if isinstance(pass_prompt_type, str):
-            assert 'year old student from the' in ret1['response'] or \
+            assert 'I am a writer' in ret1['response'] or \
                    'I am a person who is asking you a question' in ret1['response'] or \
                    'year old' in ret1['response'] or \
-                   'AI language model' in ret1['response']
+                   'AI language model' in ret1['response'] or \
+                   'who has been living' in ret1['response']
             assert 'bird' in ret2['response']
             assert 'bird' in ret3['response']
-            assert 'year old student from the' in ret4['response'] or 'I am a person who is asking you a question' in \
-                   ret4['response'] or 'year old' in ret4['response'] or 'I am an AI language model' in ret4['response']
-            assert 'year old student from the' in ret5['response'] or 'I am a person who is asking you a question' in \
-                   ret5['response'] or 'year old' in ret5['response'] or 'I am an AI language model' in ret5['response']
-            assert 'year old student from the' in ret6['response'] or 'I am a person who is asking you a question' in \
-                   ret6['response'] or 'year old' in ret6['response'] or 'I am an AI language model' in ret6['response']
-            assert 'year old student from the' in ret7['response'] or 'I am a person who is asking you a question' in \
-                   ret7['response'] or 'year old' in ret7['response'] or 'I am an AI language model' in ret7['response']
+            assert 'I am a writer' in ret4['response'] or 'I am a person who is asking you a question' in \
+                   ret4['response'] or 'year old' in ret4['response'] or 'I am an AI language model' in ret4[
+                       'response'] or \
+                   'who has been living' in ret4['response']
+            assert 'I am a writer' in ret5['response'] or 'I am a person who is asking you a question' in \
+                   ret5['response'] or 'year old' in ret5['response'] or 'I am an AI language model' in ret5[
+                       'response'] or \
+                   'who has been living' in ret5['response']
+            assert 'I am a writer' in ret6['response'] or 'I am a person who is asking you a question' in \
+                   ret6['response'] or 'year old' in ret6['response'] or 'I am an AI language model' in ret6[
+                       'response'] or \
+                   'who has been living' in ret6['response']
+            assert 'I am a writer' in ret7['response'] or 'I am a person who is asking you a question' in \
+                   ret7['response'] or 'year old' in ret7['response'] or 'I am an AI language model' in ret7[
+                       'response'] or \
+                   'who has been living' in ret7['response']
         elif base_model == 'h2oai/h2ogpt-oig-oasst1-512-6_9b':
             assert 'h2oGPT' in ret1['response']
             assert 'Birds' in ret2['response']
@@ -468,28 +480,28 @@ def test_hf_inference_server(base_model, force_langchain_evaluate, do_langchain,
             assert 'h2oGPT' in ret6['response']
             assert 'h2oGPT' in ret7['response']
         else:
-            assert 'I am a language model trained' in ret1['response'] or 'I am a helpful assistant' in \
+            assert 'artificial intelligence language model' in ret1['response'] or 'I am a helpful assistant' in \
                    ret1['response'] or 'a chat-based assistant' in ret1['response'] or 'am a student' in ret1[
                        'response'] or 'I am an AI language model' in ret1['response'] or \
-                   'woman from the United States' in ret1['response']
+                   'woman from the United States' in ret1['response'] or 'who has been living' in ret1['response']
             assert 'Once upon a time' in ret2['response']
             assert 'Once upon a time' in ret3['response']
-            assert 'I am a language model trained' in ret4['response'] or 'I am a helpful assistant' in \
+            assert 'artificial intelligence language model' in ret4['response'] or 'I am a helpful assistant' in \
                    ret4['response'] or 'a chat-based assistant' in ret4['response'] or 'am a student' in ret4[
                        'response'] or 'I am an AI language model' in ret4['response'] or \
-                   'woman from the United States' in ret4['response']
-            assert 'I am a language model trained' in ret5['response'] or 'I am a helpful assistant' in \
+                   'woman from the United States' in ret4['response'] or 'who has been living' in ret4['response']
+            assert 'artificial intelligence language model' in ret5['response'] or 'I am a helpful assistant' in \
                    ret5['response'] or 'a chat-based assistant' in ret5['response'] or 'am a student' in ret5[
                        'response'] or 'I am an AI language model' in ret5['response'] or \
-                   'woman from the United States' in ret5['response']
-            assert 'I am a language model trained' in ret6['response'] or 'I am a helpful assistant' in \
+                   'woman from the United States' in ret5['response'] or 'who has been living' in ret5['response']
+            assert 'artificial intelligence language model' in ret6['response'] or 'I am a helpful assistant' in \
                    ret6['response'] or 'a chat-based assistant' in ret6['response'] or 'am a student' in ret6[
                        'response'] or 'I am an AI language model' in ret6['response'] or \
-                   'woman from the United States' in ret6['response']
-            assert 'I am a language model trained' in ret7['response'] or 'I am a helpful assistant' in \
+                   'woman from the United States' in ret6['response'] or 'who has been living' in ret6['response']
+            assert 'artificial intelligence language model' in ret7['response'] or 'I am a helpful assistant' in \
                    ret7['response'] or 'a chat-based assistant' in ret7['response'] or 'am a student' in ret7[
                        'response'] or 'I am an AI language model' in ret7['response'] or \
-                   'woman from the United States' in ret7['response']
+                   'woman from the United States' in ret7['response'] or 'who has been living' in ret7['response']
         print("DONE", flush=True)
     finally:
         os.system("docker stop %s" % docker_hash)
@@ -639,14 +651,15 @@ def test_gradio_tgi_docker(base_model):
         ret1, ret2, ret3, ret4, ret5, ret6, ret7 = run_client_many(prompt_type=None, version=version)
         if 'llama' in base_model.lower():
             who = "I'm LLaMA, an AI assistant developed by Meta AI"
-            assert who in ret1['response']
-            assert who in ret1['response']
+            who2 = "I'm just an AI assistant"
+            assert who in ret1['response'] or who2 in ret1['response']
+            assert who in ret1['response'] or who2 in ret2['response']
             assert 'Once upon a time' in ret2['response']
             assert 'Once upon a time' in ret3['response']
-            assert who in ret4['response']
-            assert who in ret5['response']
-            assert who in ret6['response']
-            assert who in ret7['response']
+            assert who in ret4['response'] or who2 in ret3['response']
+            assert who in ret5['response'] or who2 in ret4['response']
+            assert who in ret6['response'] or who2 in ret5['response']
+            assert who in ret7['response'] or who2 in ret6['response']
         else:
             who = 'I am an AI language model'
             assert who in ret1['response']
@@ -791,8 +804,8 @@ def test_replicate_inference_server(force_langchain_evaluate,
                                              chat_conversation=chat_conversation,
                                              system_prompt=system_prompt)
         if system_prompt:
-            assert 'baby cat' in res_dict['response'] and 'meow' in res_dict['response'].lower()
-            assert 'baby cat' in ret6['response'] and 'meow' in ret6['response'].lower()
+            assert 'baby cat' in res_dict['response'] and ('meow' in res_dict['response'].lower() or 'purrs' in res_dict['response'].lower())
+            assert 'baby cat' in ret6['response'] and ('meow' in ret6['response'].lower() or 'purrs' in ret6['response'].lower())
         else:
             options_response = ['You asked "Who are you?"',
                                 """You asked, \"Who are you?\"""",

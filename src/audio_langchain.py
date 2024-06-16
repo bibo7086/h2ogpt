@@ -2,11 +2,12 @@ import logging
 import os
 import tempfile
 import time
+import uuid
 from typing import Dict, Iterator, Optional, Tuple
 
 from langchain.document_loaders.base import BaseBlobParser
 from langchain.document_loaders.blob_loaders import Blob
-from langchain.document_loaders.generic import GenericLoader
+from langchain_community.document_loaders.generic import GenericLoader
 from langchain.schema import Document
 
 logger = logging.getLogger(__name__)
@@ -174,8 +175,10 @@ class OpenAIWhisperParserLocal(BaseBlobParser):
 
         # load model for inference
         if self.device == 'cpu':
-            device_map = {"", 'cpu'}
+            device = 'cpu'
+            device_map = None
         else:
+            device = None
             device_map = {"": 'cuda:%d' % device_id} if device_id >= 0 else {'': 'cuda'}
 
         # https://huggingface.co/blog/asr-chunking
@@ -185,6 +188,7 @@ class OpenAIWhisperParserLocal(BaseBlobParser):
             chunk_length_s=30,
             stride_length_s=5,
             batch_size=8,
+            device=device,
             device_map=device_map,
         )
         if use_better:
@@ -261,7 +265,14 @@ class OpenAIWhisperParserLocal(BaseBlobParser):
 
             y, sr = librosa.load(file_obj, sr=16000)
 
-        prediction = self.pipe(y.copy(), batch_size=8)["text"]
+        yc = y.copy()
+        try:
+            prediction = self.pipe(yc, batch_size=8)["text"]
+        except ValueError as e:
+            if 'Multiple languages detected' in str(e):
+                prediction = self.pipe(yc, batch_size=8, generate_kwargs={"language": "english"})["text"]
+            else:
+                raise
 
         yield Document(
             page_content=prediction,
@@ -280,11 +291,10 @@ https://huggingface.co/Salesforce/blip-image-captioning-base
 """
 from typing import List, Union, Any, Tuple
 
-import requests
 from langchain.docstore.document import Document
-from langchain.document_loaders import ImageCaptionLoader
+from langchain_community.document_loaders import ImageCaptionLoader
 
-from utils import get_device, NullContext, clear_torch_cache, have_use_faster, makedirs
+from utils import get_device, NullContext, clear_torch_cache, have_use_faster, makedirs, get_gradio_tmp
 
 from importlib.metadata import distribution, PackageNotFoundError
 
@@ -381,7 +391,7 @@ class H2OAudioCaptionLoader(ImageCaptionLoader):
 
         # https://librosa.org/doc/main/generated/librosa.load.html
         if from_youtube:
-            save_dir = tempfile.mkdtemp()
+            save_dir = os.path.join(get_gradio_tmp(), str(uuid.uuid4()))
             makedirs(save_dir, exist_ok=True)
             youtube_loader = YoutubeAudioLoader(self.audio_paths, save_dir)
             loader = GenericLoader(youtube_loader, self.model)

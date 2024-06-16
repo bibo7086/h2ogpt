@@ -48,7 +48,19 @@ spec:
       securityContext:
         {{- toYaml .Values.h2ogpt.podSecurityContext | nindent 8 }}
       affinity:
+        {{- if .Values.h2ogpt.podAffinity }}
         podAntiAffinity:
+          {{- if .Values.h2ogpt.podAffinity.hostname }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - {{ include "h2ogpt.fullname" . }}
+              topologyKey: kubernetes.io/hostname
+          {{- end }}
+          {{- if .Values.h2ogpt.podAffinity.zone }}
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               podAffinityTerm:
@@ -59,38 +71,11 @@ spec:
                       values:
                         - {{ include "h2ogpt.fullname" . }}
                 topologyKey: failure-domain.beta.kubernetes.io/zone
-{{- if and (.Values.tgi.enabled) (not .Values.h2ogpt.stack.enabled ) }}
-      initContainers:
-        - name: tgi-check
-          securityContext:
-            {{- toYaml .Values.h2ogpt.securityContext | nindent 12 }}
-          image: "{{ .Values.h2ogpt.initImage.repository | default "busybox" }}:{{ .Values.h2ogpt.initImage.tag | default "1.36" }}"
-          imagePullPolicy: {{ .Values.h2ogpt.initImage.pullPolicy | default "IfNotPresent"}}
-          command: ["/bin/sh", "-c"]
-          args:
-            - >
-              until wget -O- http://{{ include "h2ogpt.fullname" . }}-tgi-inference:{{ .Values.tgi.service.port }}/ >/dev/null 2>&1;
-              do
-                echo "Waiting for inference service to become ready...";
-                sleep 5;
-              done
-{{- end }}
-{{- if and (.Values.vllm.enabled) (not .Values.h2ogpt.stack.enabled ) }}
-      initContainers:
-        - name: vllm-check
-          securityContext:
-            {{- toYaml .Values.h2ogpt.securityContext | nindent 12 }}
-          image: "{{ .Values.h2ogpt.initImage.repository | default "busybox" }}:{{ .Values.h2ogpt.initImage.tag | default "1.36" }}"
-          imagePullPolicy: {{ .Values.h2ogpt.initImage.pullPolicy | default "IfNotPresent"}}
-          command: ["/bin/sh", "-c"]
-          args:
-            - >
-              until wget -O- http://{{ include "h2ogpt.fullname" . }}-vllm-inference:{{ .Values.vllm.service.port }}/v1/models >/dev/null 2>&1;
-              do
-                echo "Waiting for inference service to become ready...";
-                sleep 5;
-              done
-{{- end }}
+          {{- end }}
+        {{- end }}
+      {{- with .Values.h2ogpt.extraAffinity }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.h2ogpt.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -173,9 +158,33 @@ spec:
             python3 /workspace/generate.py
           {{- end }}
           {{- if not .Values.h2ogpt.stack.enabled }}
+          {{- if and .Values.vllm.enabled (not .Values.h2ogpt.externalLLM.modelLock) }}
+          args:
+          - >
+            until wget -O- http://{{ include "h2ogpt.fullname" . }}-vllm-inference:{{ .Values.vllm.service.port }}/v1/models >/dev/null 2>&1;
+              do
+                echo "Waiting for inference service to become ready...";
+                sleep 5;
+              done
+              
+            python3 /workspace/generate.py
+          {{- end }}
+          {{- if and .Values.tgi.enabled (not .Values.h2ogpt.externalLLM.modelLock) }}
+          args:
+          - >
+            until wget -O- http://{{ include "h2ogpt.fullname" . }}-tgi-inference:{{ .Values.tgi.service.port }}/ >/dev/null 2>&1;
+              do
+                echo "Waiting for inference service to become ready...";
+                sleep 5;
+              done
+              
+            python3 /workspace/generate.py
+          {{- end }}
+          {{- if and .Values.h2ogpt.enabled (not (or .Values.vllm.enabled .Values.tgi.enabled)) }}
           args:
           - >
             python3 /workspace/generate.py
+          {{- end }}
           {{- end }}
           ports:
             - name: http
@@ -354,7 +363,19 @@ spec:
       securityContext:
         {{- toYaml .Values.tgi.podSecurityContext | nindent 8 }}
       affinity:
+        {{- if .Values.tgi.podAffinity }}
         podAntiAffinity:
+          {{- if .Values.tgi.podAffinity.hostname }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - {{ include "h2ogpt.fullname" . }}
+              topologyKey: kubernetes.io/hostname
+          {{- end }}
+          {{- if .Values.tgi.podAffinity.zone }}
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               podAffinityTerm:
@@ -365,6 +386,11 @@ spec:
                       values:
                         - {{ include "h2ogpt.fullname" . }}
                 topologyKey: failure-domain.beta.kubernetes.io/zone
+          {{- end }}
+        {{- end }}
+      {{- with .Values.tgi.extraAffinity }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.tgi.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -514,7 +540,19 @@ spec:
       securityContext:
         {{- toYaml .Values.vllm.podSecurityContext | nindent 8 }}
       affinity:
+        {{- if .Values.vllm.podAffinity }}
         podAntiAffinity:
+          {{- if .Values.vllm.podAffinity.hostname }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - {{ include "h2ogpt.fullname" . }}
+              topologyKey: kubernetes.io/hostname
+          {{- end }}
+          {{- if .Values.vllm.podAffinity.zone }}
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               podAffinityTerm:
@@ -525,6 +563,11 @@ spec:
                       values:
                         - {{ include "h2ogpt.fullname" . }}
                 topologyKey: failure-domain.beta.kubernetes.io/zone
+          {{- end }}
+        {{- end }}
+      {{- with .Values.vllm.extraAffinity }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.vllm.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

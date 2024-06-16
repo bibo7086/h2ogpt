@@ -4,7 +4,7 @@ Turn ★ into ⭐ (top-right corner) if you like the project!
 
 Query and summarize your documents or just chat with local private GPT LLMs using h2oGPT, an Apache V2 open-source project.
 
-- **Private** offline database of any documents [(PDFs, Excel, Word, Images, Video Frames, Youtube, Audio, Code, Text, MarkDown, etc.)](docs/README_LangChain.md#supported-datatypes)
+- **Private** offline database of any documents [(PDFs, Excel, Word, Images, Video Frames, YouTube, Audio, Code, Text, MarkDown, etc.)](docs/README_LangChain.md#supported-datatypes)
   - **Persistent** database (Chroma, Weaviate, or in-memory FAISS) using accurate embeddings (instructor-large, all-MiniLM-L6-v2, etc.)
   - **Efficient** use of context using instruct-tuned LLMs (no need for LangChain's few-shot approach)
   - **Parallel** summarization and extraction, reaching an output of 80 tokens per second with the 13B LLaMa2 model
@@ -14,24 +14,28 @@ Query and summarize your documents or just chat with local private GPT LLMs usin
   - **Attention Sinks** for [arbitrarily long](https://github.com/tomaarsen/attention_sinks) generation (LLaMa-2, Mistral, MPT, Pythia, Falcon, etc.)
 - **UI** or CLI with streaming of all models
   - **Upload** and **View** documents through the UI (control multiple collaborative or personal collections)
-  - **Vision LLaVa** Model and **Stable Diffusion** Image Generation
+  - **Vision Models** LLaVa, Claude-3, Gemini-Pro-Vision, GPT-4-Vision
+  - **Image Generation** Stable Diffusion (sdxl-turbo, sdxl) and PlaygroundAI (playv2)
   - **Voice STT** using Whisper with streaming audio conversion
   - **Voice TTS** using MIT-Licensed Microsoft Speech T5 with multiple voices and Streaming audio conversion
   - **Voice TTS** using MPL2-Licensed TTS including Voice Cloning and Streaming audio conversion
   - **AI Assistant Voice Control Mode** for hands-free control of h2oGPT chat
   - **Bake-off** UI mode against many models at the same time
   - **Easy Download** of model artifacts and control over models like LLaMa.cpp through the UI
-  - **Authentication** in the UI by user/password
+  - **Authentication** in the UI by user/password via Native or Google OAuth
   - **State Preservation** in the UI by user/password
 - **Linux, Docker, macOS, and Windows** support
   - [**Easy Windows Installer**](#windows-1011-64-bit-with-full-document-qa-capability) for Windows 10 64-bit (CPU/CUDA)
   - [**Easy macOS Installer**](#macos-cpum1m2-with-full-document-qa-capability) for macOS (CPU/M1/M2)
-- **Inference Servers** support (HF TGI server, vLLM, Gradio, ExLLaMa, Replicate, OpenAI, Azure OpenAI, Anthropic)
+- **Inference Servers** [support](docs/README_InferenceServers.md) for oLLaMa, HF TGI server, vLLM, Gradio, ExLLaMa, Replicate, Together.ai, OpenAI, Azure OpenAI, Anthropic
 - **OpenAI-compliant**
-  - Server Proxy API (h2oGPT acts as drop-in-replacement to OpenAI server)
-  - Python client API (to talk to Gradio server)
+  - Server Proxy [API](docs/README_CLIENT.md) (h2oGPT acts as drop-in-replacement to OpenAI server)
+  - Supports Chat and Text Completions (streaming and non-streaming), Audio Transcription (STT), Audio Generation (TTS), Image Generation, and Embedding
+- **JSON Mode** with any model via code block extraction.  Also supports MistralAI JSON mode, Claude-3 via function calling with strict Schema, OpenAI via JSON mode, and vLLM via guided_json with strict Schema  
 - **Web-Search** integration with Chat and Document Q/A
 - **Agents** for Search, Document Q/A, Python Code, CSV frames (Experimental, best with OpenAI currently)
+- **Open Web UI** with h2oGPT as backend via OpenAI Proxy
+  - Supports chat completion with streaming, document Q/A, STT, TTS, and image generation.  See [Start-up Docs](docs/FAQ.md#open-web-ui).
 - **Evaluate** performance using reward models
 - **Quality** maintained with over 1000 unit and integration tests taking over 4 GPU-hours
 
@@ -43,6 +47,7 @@ Query and summarize your documents or just chat with local private GPT LLMs usin
 [![Windows](https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/h2oai/h2ogpt/blob/main/docs/README_WINDOWS.md)
 [![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=for-the-badge&logo=docker&logoColor=white)](https://github.com/h2oai/h2ogpt/blob/main/docs/README_DOCKER.md)
 
+#### Limited Doc Q/A trial
 
 To quickly try out h2oGPT with limited document Q/A capability, create a fresh Python 3.10 environment and run:
 * CPU or MAC (M1/M2):
@@ -56,6 +61,30 @@ To quickly try out h2oGPT with limited document Q/A capability, create a fresh P
    export PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu121 https://huggingface.github.io/autogptq-index/whl/cu121"
    # for cu118 use export PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu118 https://huggingface.github.io/autogptq-index/whl/cu118"
    ```
+Then choose your llama_cpp_python options, by changing `CMAKE_ARGS` to whichever system you have according to [llama_cpp_python backend documentation](https://github.com/abetlen/llama-cpp-python?tab=readme-ov-file#supported-backends).
+E.g. CUDA on Linux:
+```bash
+export LLAMA_CUBLAS=1
+export CMAKE_ARGS="-DLLAMA_CUBLAS=on -DCMAKE_CUDA_ARCHITECTURES=all"
+export FORCE_CMAKE=1
+```
+Note for some reason things will fail with llama_cpp_python if don't add all cuda arches, and building with all those arches does take some time.
+Windows CUDA:
+```cmdline
+set CMAKE_ARGS=-DLLAMA_CUBLAS=on -DCMAKE_CUDA_ARCHITECTURES=all
+set LLAMA_CUBLAS=1
+set FORCE_CMAKE=1
+```
+Note for some reason things will fail with llama_cpp_python if don't add all cuda arches, and building with all those arches does take some time.
+Metal M1/M2:
+```bash
+export CMAKE_ARGS="-DLLAMA_METAL=on"
+export FORCE_CMAKE=1
+```
+
+#### Chat with h2oGPT
+
+```bash
 Then run the following commands on any system:
    ```bash
    git clone https://github.com/h2oai/h2ogpt.git
@@ -63,21 +92,29 @@ Then run the following commands on any system:
    pip install -r requirements.txt
    pip install -r reqs_optional/requirements_optional_langchain.txt
 
-   # default uses cu121, for cu118, comment out cu121 and comment in similar cu118 wheels
-   # for no avx, comment-out avx wheels and choose ones without avx
-   # for AMD ROC, comment-out all except the correct ROC wheel
-   pip install -r reqs_optional/requirements_optional_gpt4all.txt
+   pip uninstall llama_cpp_python llama_cpp_python_cuda -y
+   pip install -r reqs_optional/requirements_optional_llamacpp_gpt4all.txt --no-cache-dir
 
    pip install -r reqs_optional/requirements_optional_langchain.urls.txt
    # GPL, only run next line if that is ok:
-   # pip install -r reqs_optional/requirements_optional_langchain.gpllike.txt
+   pip install -r reqs_optional/requirements_optional_langchain.gpllike.txt
 
-   python generate.py --base_model=TheBloke/zephyr-7B-beta-GGUF --prompt_type=zephyr --max_seq_len=4096
+   # choose up to 32768 if have enough GPU memory:
+   python generate.py --base_model=TheBloke/Mistral-7B-Instruct-v0.2-GGUF --prompt_type=mistral --max_seq_len=4096
    ```
 Next, go to your browser by visiting [http://127.0.0.1:7860](http://127.0.0.1:7860) or [http://localhost:7860](http://localhost:7860).  Choose 13B for a better model than 7B.
-If you encounter issues with `llama-cpp-python` or other packages that try to compile and fail, try binary wheels for your platform as linked in the detailed instructions below.  For AVX1 or AMD ROC systems, edit `reqs_optional/requirements_optional_gpt4all.txt` to choose valid packages.
 
-We recommend quantized models for most small-GPU systems, e.g. [LLaMa-2-7B-Chat-GGUF](https://huggingface.co/TheBloke/Llama-2-7b-Chat-GGUF/resolve/main/llama-2-7b-chat.Q6_K.gguf) for 9GB+ GPU memory or larger models like [LLaMa-2-13B-Chat-GGUF](https://huggingface.co/TheBloke/Llama-2-7b-Chat-GGUF/resolve/main/llama-2-13b-chat.Q6_K.gguf) if you have 16GB+ GPU memory.
+#### Chat template based GGUF models
+
+For newer chat template models, a `--prompt_type` is not required on CLI, but for GGUF files one should pass the HF tokenizer so it knows the chat template, e.g. for LLaMa-3:
+```bash
+python generate.py --base_model=llama --model_path_llama=https://huggingface.co/QuantFactory/Meta-Llama-3-8B-Instruct-GGUF/resolve/main/Meta-Llama-3-8B-Instruct.Q5_K_M.gguf?download=true --tokenizer_base_model=meta-llama/Meta-Llama-3-8B-Instruct --max_seq_len=8192
+```
+Or for Phi:
+```bash
+python generate.py  --tokenizer_base_model=microsoft/Phi-3-mini-4k-instruct --base_model=llama --llama_cpp_model=https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf --max_seq_len=4096 
+```
+the `--llama_cpp_path` could be a local path as well if you already downloaded it, or we will also check the `llamacpp_path` for the file.
 
 See [Offline](docs/README_offline.md#tldr) for how to run h2oGPT offline.
 
@@ -129,8 +166,12 @@ Note that for all platforms, some packages such as DocTR, Unstructured, BLIP, St
 ---
 
 #### macOS (CPU/M1/M2) with full document Q/A capability
-* One-click Installers (Experimental and subject to changes)
+* One-click Installers (Experimental and subject to changes, we haven't tested each and every feature with these installers, we encourage the community to try them and report any issues)
 
+  Mar 07, 2024
+  - [h2ogpt-osx-m1-cpu](https://h2o-release.s3.amazonaws.com/h2ogpt/Mar2024/h2ogpt-osx-m1-cpu)
+  - [h2ogpt-osx-m1-gpu](https://h2o-release.s3.amazonaws.com/h2ogpt/Mar2024/h2ogpt-osx-m1-gpu)
+  
   Nov 08, 2023
   - [h2ogpt-osx-m1-cpu](https://h2o-release.s3.amazonaws.com/h2ogpt/Nov2023/h2ogpt-osx-m1-cpu)
   - [h2ogpt-osx-m1-gpu](https://h2o-release.s3.amazonaws.com/h2ogpt/Nov2023/h2ogpt-osx-m1-gpu)
@@ -147,32 +188,12 @@ Note that for all platforms, some packages such as DocTR, Unstructured, BLIP, St
 
 ---
 
-#### Example Models
-* [Highest accuracy and speed](https://huggingface.co/h2oai/h2ogpt-4096-llama2-70b-chat) on 16-bit with TGI/vLLM using ~48GB/GPU when in use (4xA100 high concurrency, 2xA100 for low concurrency)
-* [Middle-range accuracy](https://huggingface.co/h2oai/h2ogpt-gm-oasst1-en-2048-falcon-40b-v2) on 16-bit with TGI/vLLM using ~45GB/GPU when in use (2xA100)
-* [Small memory profile with ok accuracy](https://huggingface.co/TheBloke/Llama-2-13B-Chat-GGUF) 16GB GPU if full GPU offloading
-* [Balanced accuracy and size](https://huggingface.co/h2oai/h2ogpt-4096-llama2-13b-chat) on 16-bit with TGI/vLLM using ~45GB/GPU when in use (1xA100)
-* [Smallest or CPU friendly](https://huggingface.co/TheBloke/Llama-2-7B-Chat-GGUF) 32GB system ram or 9GB GPU if full GPU offloading
-* [Best for 4*A10G using g5.12xlarge](https://huggingface.co/TheBloke/Llama-2-70B-chat-AWQ) AWQ LLaMa 70B using 4*A10G using vLLM
-
-**GPU** mode requires CUDA support via torch and transformers. A 7B/13B model in 16-bit uses 14GB/26GB of GPU memory to store the weights (2 bytes per weight). Compression such as 4-bit precision (bitsandbytes, AWQ, GPTQ, etc.) can further reduce memory requirements down to less than 6GB when asking a question about your documents. (For more information, see [low-memory mode](docs/FAQ.md#low-memory-mode).)
-
-**CPU** mode uses GPT4ALL and LLaMa.cpp, e.g. gpt4all-j, requiring about 14GB of system RAM in typical use.
-
----
-
 ### Live Demos
 - [![img-small.png](docs/img-small.png) Live h2oGPT Document Q/A Demo](https://gpt.h2o.ai/)
 - [🤗 Live h2oGPT Chat Demo 1](https://huggingface.co/spaces/h2oai/h2ogpt-chatbot)
 - [🤗 Live h2oGPT Chat Demo 2](https://huggingface.co/spaces/h2oai/h2ogpt-chatbot2)
 - [![](https://colab.research.google.com/assets/colab-badge.svg) h2oGPT CPU](https://colab.research.google.com/drive/13RiBdAFZ6xqDwDKfW6BG_-tXfXiqPNQe?usp=sharing)
 - [![](https://colab.research.google.com/assets/colab-badge.svg) h2oGPT GPU](https://colab.research.google.com/drive/143-KFHs2iCqXTQLI2pFCDiR69z0dR8iE?usp=sharing)
-
-### Inference Benchmarks for Summarization & Generation
-
-* [Benchmark results for Llama2](https://github.com/h2oai/h2ogpt/blob/main/benchmarks/perf.md)
-* [pytest to create benchmark results](https://github.com/h2oai/h2ogpt/blob/main/tests/test_perf_benchmarks.py)
-* [Raw benchmark results (JSON)](https://github.com/h2oai/h2ogpt/blob/main/benchmarks/perf.json)
 
 ### Resources
 - [Discord](https://discord.gg/WKhYMWcVbq)
@@ -204,8 +225,8 @@ YouTube 4K version: https://www.youtube.com/watch?v=_iktbj4obAI
    * [CLI chat](docs/README_CLI.md)
    * [Gradio UI](docs/README_ui.md)
    * [Client API (Gradio, OpenAI-Compliant)](docs/README_CLIENT.md)
-   * [Inference Servers (HF TGI server, vLLM, Gradio, ExLLaMa, Replicate, OpenAI, Azure OpenAI)](docs/README_InferenceServers.md)
-   * [Python Wheel](docs/README_WHEEL.md)
+   * [Inference Servers (oLLaMa, HF TGI server, vLLM, Groq, Anthropic, Google, Mistral, Gradio, ExLLaMa, Replicate, OpenAI, Azure OpenAI)](docs/README_InferenceServers.md)
+   * [Build Python Wheel](docs/README_WHEEL.md)
    * [Offline Installation](docs/README_offline.md)
    * [Low Memory](docs/FAQ.md#low-memory-mode)
    * [Docker](docs/README_DOCKER.md)
@@ -242,10 +263,8 @@ These are not part of normal installation instructions and are experimental.
 
 ### Roadmap
 
-- Integration of code and resulting LLMs with downstream applications and low/no-code platforms
-- Complement h2oGPT chatbot with other APIs like [ToolBench](https://github.com/OpenBMB/ToolBench)
-- Enhance the model's code completion, reasoning, and mathematical capabilities, ensure factual correctness, minimize hallucinations, and avoid repetitive output
-- Add better agents for SQL and CSV question/answer
+- Complement h2oGPT chatbot with other APIs like [ToolBench](https://github.com/OpenBMB/ToolBench), Wolfram Alpha, Semantic Scholar, etc.
+- Enhance h2oGPT with reliable agentic control
 
 ### Development
 
@@ -254,11 +273,10 @@ These are not part of normal installation instructions and are experimental.
 - To run h2oGPT tests:
     ```bash
     pip install requirements-parser pytest-instafail pytest-random-order playsound==1.3.0
-    pytest --instafail -s -v tests
-    # for client tests
-    make -C client setup
-    make -C client build
-    pytest --instafail -s -v client/tests
+    conda install -c conda-forge gst-python -y
+    sudo apt-get install gstreamer-1.0
+    pip install pygame
+    GPT_H2O_AI=0 CONCURRENCY_COUNT=1 pytest --instafail -s -v tests
     # for openai server test on already-running local server
     pytest -s -v -n 4 openai_server/test_openai_server.py::test_openai_client
     ```
@@ -271,6 +289,12 @@ These are not part of normal installation instructions and are experimental.
 - [README for LangChain](docs/README_LangChain.md)
 
 - Useful [links](docs/LINKS.md) for additional context and information on competitors, models, and datasets
+
+### Inference Benchmarks for Summarization & Generation
+
+* [Benchmark results for Llama2](https://github.com/h2oai/h2ogpt/blob/main/benchmarks/perf.md)
+* [pytest to create benchmark results](https://github.com/h2oai/h2ogpt/blob/main/tests/test_perf_benchmarks.py)
+* [Raw benchmark results (JSON)](https://github.com/h2oai/h2ogpt/blob/main/benchmarks/perf.json)
 
 ### Acknowledgements
 

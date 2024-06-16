@@ -1,12 +1,16 @@
 import inspect
 import os
+import time
 from typing import Dict, Any, Optional, List, Iterator
+
+import filelock
 from langchain.callbacks.manager import CallbackManagerForLLMRun
 from langchain.schema.output import GenerationChunk
-from langchain.llms import gpt4all
+from langchain_community.llms import gpt4all
 from pydantic.v1 import root_validator
 
-from utils import FakeTokenizer, url_alive, download_simple, clear_torch_cache, n_gpus_global
+from src.enums import coqui_lock_name
+from utils import FakeTokenizer, url_alive, download_simple, clear_torch_cache, n_gpus_global, makedirs, get_lock_file
 
 
 def get_model_tokenizer_gpt4all(base_model, n_jobs=None, gpu_id=None, n_gpus=None, max_seq_len=None,
@@ -79,6 +83,7 @@ def get_model_kwargs(llamacpp_dict, default_kwargs, cls, exclude_list=[]):
 
 def get_gpt4all_default_kwargs(max_new_tokens=256,
                                temperature=0.1,
+                               seed=0,
                                repetition_penalty=1.0,
                                top_k=40,
                                top_p=0.7,
@@ -100,6 +105,7 @@ def get_gpt4all_default_kwargs(max_new_tokens=256,
                           repeat_penalty=repetition_penalty,
                           temp=temperature,
                           temperature=temperature,
+                          seed=seed,
                           top_k=top_k,
                           top_p=top_p,
                           use_mlock=True,
@@ -116,14 +122,19 @@ def get_llm_gpt4all(model_name=None,
                     model=None,
                     max_new_tokens=256,
                     temperature=0.1,
+                    seed=0,
                     repetition_penalty=1.0,
                     top_k=40,
                     top_p=0.7,
                     streaming=False,
                     callbacks=None,
+                    tokenizer=None,
                     prompter=None,
+                    max_time=None,
                     context='',
                     iinput='',
+                    chat_conversation=[],
+                    user_prompt_for_fake_system_prompt=None,
                     n_jobs=None,
                     n_gpus=None,
                     main_gpu=0,
@@ -133,6 +144,7 @@ def get_llm_gpt4all(model_name=None,
                     llamacpp_path=None,
                     llamacpp_dict=None,
                     ):
+    model_was_None = model is None
     redo = False
     if not inner_class:
         assert prompter is not None
@@ -140,6 +152,7 @@ def get_llm_gpt4all(model_name=None,
     default_kwargs = \
         get_gpt4all_default_kwargs(max_new_tokens=max_new_tokens,
                                    temperature=temperature,
+                                   seed=seed,
                                    repetition_penalty=repetition_penalty,
                                    top_k=top_k,
                                    top_p=top_p,
@@ -177,7 +190,10 @@ def get_llm_gpt4all(model_name=None,
         model_kwargs = get_model_kwargs(llamacpp_dict, default_kwargs, cls, exclude_list=['lc_kwargs'])
         model_kwargs.update(dict(model_path=model_path, callbacks=callbacks, streaming=streaming,
                                  prompter=prompter, context=context, iinput=iinput,
-                                 n_gpus=n_gpus))
+                                 tokenizer=tokenizer,
+                                 chat_conversation=chat_conversation,
+                                 user_prompt_for_fake_system_prompt=user_prompt_for_fake_system_prompt,
+                                 n_gpus=n_gpus, max_time=max_time, ))
 
         # migration to  new langchain fix:
         odd_keys = ['model_kwargs', 'grammar_path', 'grammar']
@@ -193,9 +209,11 @@ def get_llm_gpt4all(model_name=None,
             max_seq_len = llm.client.n_embd()
             print("Auto-detected LLaMa n_ctx=%s, will unload then reload with this setting." % max_seq_len)
 
-        # with multiple GPUs, something goes wrong unless generation occurs early before other imports
-        # CUDA error 704 at /tmp/pip-install-khkugdmy/llama-cpp-python_8c0a9782b7604a5aaf95ec79856eac97/vendor/llama.cpp/ggml-cuda.cu:6408: peer access is already enabled
-        inner_model("Say exactly one word", max_tokens=1)
+        if model_was_None is None:
+            # with multiple GPUs, something goes wrong unless generation occurs early before other imports
+            # CUDA error 704 at /tmp/pip-install-khkugdmy/llama-cpp-python_8c0a9782b7604a5aaf95ec79856eac97/vendor/llama.cpp/ggml-cuda.cu:6408: peer access is already enabled
+            # But don't do this action in case another thread doing llama.cpp, so just getting model ready.
+            inner_model("Say exactly one word", max_tokens=1)
         inner_tokenizer = FakeTokenizer(tokenizer=llm.client, is_llama_cpp=True, model_max_length=max_seq_len)
     elif model_name == 'gpt4all_llama':
         # FIXME: streaming not thread safe due to:
@@ -216,7 +234,11 @@ def get_llm_gpt4all(model_name=None,
         model_kwargs = get_model_kwargs(llamacpp_dict, default_kwargs, cls, exclude_list=['lc_kwargs'])
         model_kwargs.update(
             dict(model=model_path, backend='llama', callbacks=callbacks, streaming=streaming,
-                 prompter=prompter, context=context, iinput=iinput))
+                 prompter=prompter, context=context, iinput=iinput,
+                 tokenizer=tokenizer,
+                 chat_conversation=chat_conversation,
+                 user_prompt_for_fake_system_prompt=user_prompt_for_fake_system_prompt,
+                 ))
         llm = cls(**model_kwargs)
         inner_model = llm.client
         inner_tokenizer = FakeTokenizer(model_max_length=max_seq_len)
@@ -238,7 +260,11 @@ def get_llm_gpt4all(model_name=None,
         model_kwargs = get_model_kwargs(llamacpp_dict, default_kwargs, cls, exclude_list=['lc_kwargs'])
         model_kwargs.update(
             dict(model=model_path, backend='gptj', callbacks=callbacks, streaming=streaming,
-                 prompter=prompter, context=context, iinput=iinput))
+                 prompter=prompter, context=context, iinput=iinput,
+                 tokenizer=tokenizer,
+                 chat_conversation=chat_conversation,
+                 user_prompt_for_fake_system_prompt=user_prompt_for_fake_system_prompt,
+                 ))
         llm = cls(**model_kwargs)
         inner_model = llm.client
         inner_tokenizer = FakeTokenizer(model_max_length=max_seq_len)
@@ -252,9 +278,12 @@ def get_llm_gpt4all(model_name=None,
 
 class H2OGPT4All(gpt4all.GPT4All):
     model: Any
+    tokenizer: Any = None
     prompter: Any
     context: Any = ''
     iinput: Any = ''
+    chat_conversation = []
+    user_prompt_for_fake_system_prompt: Any = None
     """Path to the pre-trained GPT4All model file."""
 
     @root_validator()
@@ -308,7 +337,10 @@ class H2OGPT4All(gpt4all.GPT4All):
 
         # use instruct prompting
         data_point = dict(context=self.context, instruction=prompt, input=self.iinput)
-        prompt = self.prompter.generate_prompt(data_point)
+        prompt = self.prompter.generate_prompt(data_point,
+                                               chat_conversation=self.chat_conversation,
+                                               user_prompt_for_fake_system_prompt=self.user_prompt_for_fake_system_prompt,
+                                               )
 
         verbose = False
         if verbose:
@@ -321,19 +353,23 @@ class H2OGPT4All(gpt4all.GPT4All):
     #    return self.client.tokenize(b" " + text.encode("utf-8"))
 
 
-from langchain.llms import LlamaCpp
+from langchain_community.llms import LlamaCpp
 
 
 class H2OLlamaCpp(LlamaCpp):
     """Path to the pre-trained GPT4All model file."""
     model_path: Any
+    tokenizer: Any = None
     prompter: Any
     context: Any
     iinput: Any
+    chat_conversation = []
     count_input_tokens: Any = 0
     prompts: Any = []
     count_output_tokens: Any = 0
     n_gpus: Any = -1
+    max_time: Any = None
+    user_prompt_for_fake_system_prompt: Any = None
 
     @root_validator()
     def validate_environment(cls, values: Dict) -> Dict:
@@ -367,7 +403,7 @@ class H2OLlamaCpp(LlamaCpp):
                     else:
                         from llama_cpp_cuda import Llama
                 except Exception as e:
-                    print("Failed to listen to n_gpus: %s" % str(e), flush=True)
+                    print("Failed to listen to n_gpus: %s, trying llama_cpp module" % str(e), flush=True)
                     try:
                         from llama_cpp import Llama
                     except ImportError:
@@ -396,6 +432,7 @@ class H2OLlamaCpp(LlamaCpp):
             run_manager: Optional[CallbackManagerForLLMRun] = None,
             **kwargs,
     ) -> str:
+        t0 = time.time()
         verbose = False
 
         inner_tokenizer = FakeTokenizer(tokenizer=self.client, is_llama_cpp=True, model_max_length=self.n_ctx)
@@ -406,7 +443,10 @@ class H2OLlamaCpp(LlamaCpp):
 
         # use instruct prompting
         data_point = dict(context=self.context, instruction=prompt, input=self.iinput)
-        prompt = self.prompter.generate_prompt(data_point)
+        prompt = self.prompter.generate_prompt(data_point,
+                                               chat_conversation=self.chat_conversation,
+                                               user_prompt_for_fake_system_prompt=self.user_prompt_for_fake_system_prompt,
+                                               )
         self.count_input_tokens += self.get_num_tokens(prompt)
         self.prompts.append(prompt)
         if stop is None:
@@ -416,24 +456,31 @@ class H2OLlamaCpp(LlamaCpp):
         if verbose:
             print("_call prompt: %s" % prompt, flush=True)
 
-        if self.streaming:
-            # parent handler of streamer expects to see prompt first else output="" and lose if prompt=None in prompter
-            text = ""
-            for token in self.stream(input=prompt, stop=stop):
-                # for token in self.stream(input=prompt, stop=stop, run_manager=run_manager):
-                text_chunk = token  # ["choices"][0]["text"]
-                text += text_chunk
-            self.count_output_tokens += self.get_num_tokens(text)
-            text = self.remove_stop_text(text, stop=stop)
-            return text
-        else:
-            params = self._get_parameters(stop)
-            params = {**params, **kwargs}
-            result = self.client(prompt=prompt, **params)
-            text = result["choices"][0]["text"]
-            self.count_output_tokens += self.get_num_tokens(text)
-            text = self.remove_stop_text(text, stop=stop)
-            return text
+        # can't run llamacpp and coqui at same time, one has to win
+        with filelock.FileLock(get_lock_file('llamacpp')):
+            with filelock.FileLock(get_lock_file(coqui_lock_name)):
+                if self.streaming:
+                    # parent handler of streamer expects to see prompt first else output="" and lose if prompt=None in prompter
+                    text = ""
+                    for token in self.stream(input=prompt, stop=stop):
+                        if self.max_time is not None and (time.time() - t0) > self.max_time:
+                            if verbose:
+                                print("LLaMa.cpp reached max_time=%s" % self.max_time, flush=True)
+                            break
+                        # for token in self.stream(input=prompt, stop=stop, run_manager=run_manager):
+                        text_chunk = token  # ["choices"][0]["text"]
+                        text += text_chunk
+                    self.count_output_tokens += self.get_num_tokens(text)
+                    text = self.remove_stop_text(text, stop=stop)
+                    return text
+                else:
+                    params = self._get_parameters(stop)
+                    params = {**params, **kwargs}
+                    result = self.client(prompt=prompt, **params)
+                    text = result["choices"][0]["text"]
+                    self.count_output_tokens += self.get_num_tokens(text)
+                    text = self.remove_stop_text(text, stop=stop)
+                    return text
 
     def remove_stop_text(self, text, stop=None):
         # remove stop sequences from the end of the generated text
