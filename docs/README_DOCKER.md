@@ -1,6 +1,10 @@
 # Run or Build h2oGPT Docker
 
-## Setup Docker for CPU Inference
+* Install Docker for [Linux](https://docs.docker.com/engine/install/ubuntu/)
+* Install Docker for [Windows](https://docs.docker.com/desktop/install/windows-install/)
+* Install Docker for [MAC](https://docs.docker.com/desktop/install/mac-install/)
+
+## Linux Ubuntu: Setup Docker for CPU Inference
 
 No special docker instructions are required, just follow [these instructions](https://docs.docker.com/engine/install/ubuntu/) to get docker setup at all, i.e.:
 ```bash
@@ -24,15 +28,14 @@ newgrp docker
 ```
 which avoids having to reboot.  Or just reboot to have docker access.  If this cannot be done without entering root access, then edit the `/etc/group` and add your user to group `docker`.
 
-## Setup Docker for GPU Inference
+## Linux Ubuntu: Setup Docker for GPU Inference
 
 Ensure docker installed and ready (requires sudo), can skip if system is already capable of running nvidia containers.  Example here is for Ubuntu, see [NVIDIA Containers](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#docker) for more examples.
 ```bash
-distribution=$(. /etc/os-release;echo $ID$VERSION_ID) \
-    && curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
-    && curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
-        sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-        sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
+  && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+    sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit-base
 sudo apt install -y nvidia-container-runtime
 sudo nvidia-ctk runtime configure --runtime=docker
@@ -46,7 +49,7 @@ sudo docker run --rm --runtime=nvidia --gpus all ubuntu nvidia-smi
 
 If running on A100's, might require [Installing Fabric Manager](INSTALL.md#install-and-run-nvidia-fabric-manager-on-systems-with-multiple-a100-or-h100-gpus) and [Installing GPU Manager](INSTALL.md#install-nvidia-gpu-manager-on-systems-with-multiple-a100-or-h100-gpus).
 
-## Run h2oGPT using Docker
+## Prebuild Docker for Windows/Linux x86
 
 All available public h2oGPT docker images can be found in [Google Container Registry](https://console.cloud.google.com/gcr/images/vorvan/global/h2oai/h2ogpt-runtime).  These require cuda drivers that handle CUDA 12.1 or higher.
 
@@ -54,6 +57,36 @@ Ensure image is up-to-date by running:
 ```bash
 docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.1
 ```
+
+## Build Docker
+
+The GCR contains nightly and released images for x86.
+
+### x86
+
+The default docker supports CUDA or CPU for x86, and HF models supported by torch on Metal M1/M2.
+
+### MAC Metal or other architectures
+
+Choose your llama_cpp_python options, by changing `CMAKE_ARGS` to whichever system you have according to [llama_cpp_python backend documentation](https://github.com/abetlen/llama-cpp-python?tab=readme-ov-file#supported-backends).
+
+For example, for Metal M1/M2 support of llama.cpp GGUF files, one should change `CMAKE_ARGS` in [docker_build_script_ubuntu.sh](../docker_build_script_ubuntu.sh) to have:
+```bash
+export CMAKE_ARGS="-DLLAMA_METAL=on"
+```
+and remove `GGML_CUDA=1`, so that the docker image is Metal Compatible for llama.cpp GGUF files.  Otherwise, Torch supports Metal M1/M2 directly without changes.
+
+### Build
+
+To build the docker image after any local changes (to support Metal for GGUF files, etc.):
+```bash
+# build image
+touch build_info.txt
+docker build -t h2ogpt .
+```
+then to run this version of the docker image, just replace `gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.1` with `h2ogpt:latest` in any docker run commands.
+
+## Linux: Run h2oGPT using Docker
 
 An example running h2oGPT via docker using Zephyr 7B Beta model is:
 ```bash
@@ -119,7 +152,7 @@ For single GPU use `--gpus '"device=0"'` or for 2 GPUs use `--gpus '"device=0,1"
 
 See [README_GPU](README_GPU.md) for more details about what to run.
 
-## Run h2oGPT in docker offline:
+## Linux: Run h2oGPT in docker offline:
 
 Ensure $HOME/users and $HOME/db_nonusers are writeable by user running docker, then run:
 ```bash
@@ -188,6 +221,7 @@ For the vLLM server running on 2 GPUs using h2oai/h2ogpt-4096-llama2-7b-chat mod
 ```bash
 unset CUDA_VISIBLE_DEVICES
 mkdir -p $HOME/.cache/huggingface/hub
+mkdir -p $HOME/.cache/huggingface/modules/
 mkdir -p $HOME/.triton/cache/
 mkdir -p $HOME/.config/vllm
 docker run \
@@ -198,7 +232,10 @@ docker run \
     --rm --init \
     -e NCCL_IGNORE_DISABLED_P2P=1 \
     -e HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN \
+    -e VLLM_NO_USAGE_STATS=1 \
     -e VLLM_NCCL_SO_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/nccl/lib/libnccl.so.2 \
+    -e DO_NOT_TRACK=1 \
+    -e NUMBA_CACHE_DIR=/tmp/ \
     -v /etc/passwd:/etc/passwd:ro \
     -v /etc/group:/etc/group:ro \
     -u `id -u`:`id -g` \
@@ -228,6 +265,7 @@ INFO:     Uvicorn running on http://0.0.0.0:5000 (Press CTRL+C to quit
 For LLaMa-2 70B AWQ in docker using vLLM run:
 ```bash
 mkdir -p $HOME/.cache/huggingface/hub
+mkdir -p $HOME/.cache/huggingface/modules/
 mkdir -p $HOME/.triton/cache/
 mkdir -p $HOME/.config/vllm
 docker run -d \
@@ -237,7 +275,10 @@ docker run -d \
     -p 5000:5000 \
     -e NCCL_IGNORE_DISABLED_P2P=1 \
     -e HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN \
+    -e VLLM_NO_USAGE_STATS=1 \
     -e VLLM_NCCL_SO_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/nccl/lib/libnccl.so.2 \
+    -e DO_NOT_TRACK=1 \
+    -e NUMBA_CACHE_DIR=/tmp/ \
     -v /etc/passwd:/etc/passwd:ro \
     -v /etc/group:/etc/group:ro \
     -u `id -u`:`id -g` \
@@ -262,6 +303,7 @@ We add `--enforce-eager` to avoid excess memory usage by CUDA graphs.
 For 4*A10G on AWS using LLaMa-2 70B AWQ run:
 ```bash
 mkdir -p $HOME/.cache/huggingface/hub
+mkdir -p $HOME/.cache/huggingface/modules/
 mkdir -p $HOME/.triton/cache/
 mkdir -p $HOME/.config/vllm
 docker run -d \
@@ -271,7 +313,10 @@ docker run -d \
     -p 5000:5000 \
     -e NCCL_IGNORE_DISABLED_P2P=1 \
     -e HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN \
+    -e VLLM_NO_USAGE_STATS=1 \
     -e VLLM_NCCL_SO_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/nccl/lib/libnccl.so.2 \
+    -e DO_NOT_TRACK=1 \
+    -e NUMBA_CACHE_DIR=/tmp/ \
     -v /etc/passwd:/etc/passwd:ro \
     -v /etc/group:/etc/group:ro \
     -u `id -u`:`id -g` \
@@ -365,6 +410,7 @@ Each docker can run on any system where network can reach or on same system on d
 One a low-memory GPU system can add other options to limit batching, e.g.:
 ```bash
 mkdir -p $HOME/.cache/huggingface/hub/
+mkdir -p $HOME/.cache/huggingface/modules/
 export MODEL=h2oai/h2ogpt-4096-llama2-7b-chat
 docker run -d --gpus '"device=0"' \
         --shm-size 1g \
@@ -460,14 +506,8 @@ docker run \
 
 For a more detailed description of other parameters of the make_db script, checkout the definition in this file: https://github.com/h2oai/h2ogpt/blob/main/src/make_db.py
 
-## Build Docker
 
-```bash
-# build image
-touch build_info.txt
-docker build -t h2ogpt .
-```
-then to run this version of the docker image, just replace `gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.1` with `h2ogpt:latest` in above run command.
+
 
 ## Docker Compose Setup & Inference
 
@@ -492,4 +532,3 @@ then to run this version of the docker image, just replace `gcr.io/vorvan/h2oai/
     ```bash
     docker-compose down --volumes --rmi all
     ```
-

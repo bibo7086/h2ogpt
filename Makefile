@@ -1,12 +1,18 @@
 all: clean dist
 
-PACKAGE_VERSION       := `cat version.txt | tr -d '\n'`
-BUILD_TAG             := $(shell git describe --always --dirty)
-DOCKER_TEST_IMAGE     := harbor.h2o.ai/h2ogpt/test-image:$(BUILD_TAG)
-PYTHON_BINARY         ?= `which python`
-DEFAULT_MARKERS       ?= "not need_tokens and not need_gpu"
+PACKAGE_VERSION              := `cat version.txt | tr -d '\n'`
+BUILD_TAG                    := $(shell git describe --always --dirty)
+DOCKER_H2OGPT_RUNTIME_IMAGE  := gcr.io/vorvan/h2oai/h2oai-h2ogpt-runtime:$(BUILD_TAG)
+DOCKER_H2OGPT_VLLM_IMAGE     := gcr.io/vorvan/h2oai/h2oai-h2ogpt-vllm:$(BUILD_TAG)
+PYTHON_BINARY                ?= `which python`
+DEFAULT_MARKERS              ?= "not need_tokens and not need_gpu"
 
-.PHONY: venv dist test publish docker_build build_info.txt
+# h2ogpt base and vllm images built elsewhere and referenced here:
+DOCKER_BASE_OS_IMAGE     := gcr.io/vorvan/h2oai/h2ogpt-oss-wolfi-base:9
+DOCKER_VLLM_IMAGE        := gcr.io/vorvan/h2oai/h2ogpte-vllm:0.6.3.post1-38ed4ff2
+
+
+.PHONY: venv dist test publish docker_build docker_push build_info.txt
 
 clean:
 	rm -rf dist build h2ogpt.egg-info
@@ -44,31 +50,44 @@ build_info.txt:
 	@echo "build_user=\"`id -u -n`\"" >> $@
 	@echo "base_version=\"$(PACKAGE_VERSION)\"" >> $@
 
-git_hash.txt:
-	@echo "$(shell git rev-parse HEAD)" >> $@
 
-docker_build: build_info.txt git_hash.txt
-ifeq ($(shell curl --connect-timeout 4 --write-out %{http_code} -sS --output /dev/null -X GET http://harbor.h2o.ai/api/v2.0/projects/h2ogpt/repositories/test-image/artifacts/$(BUILD_TAG)/tags),200)
-	@echo "Image already pushed to Harbor: $(DOCKER_TEST_IMAGE)"
+docker_build: build_info.txt
+ifeq ($(shell curl --connect-timeout 4 --write-out %{http_code} -sS --output /dev/null -X GET https://gcr.io/v2/vorvan/h2oai/h2oai-h2ogpt-runtime/manifests/$(BUILD_TAG)),200)
+	@echo "Image already pushed to GCR: $(DOCKER_H2OGPT_RUNTIME_IMAGE)"
+	docker pull $(DOCKER_H2OGPT_RUNTIME_IMAGE)
 else
-	DOCKER_BUILDKIT=1 docker build -t $(DOCKER_TEST_IMAGE) -f Dockerfile .
-	docker push $(DOCKER_TEST_IMAGE)
+	docker pull $(DOCKER_BASE_OS_IMAGE)
+	DOCKER_BUILDKIT=1 docker build -t $(DOCKER_H2OGPT_RUNTIME_IMAGE) -t h2ogpt:current -f Dockerfile .
+endif
+ifeq ($(shell curl --connect-timeout 4 --write-out %{http_code} -sS --output /dev/null -X GET https://gcr.io/v2/vorvan/h2oai/h2oai-h2ogpt-vllm/manifests/$(BUILD_TAG)),200)
+	@echo "VLLM Image already pushed to GCR: $(DOCKER_H2OGPT_VLLM_IMAGE)"
+	docker pull $(DOCKER_H2OGPT_VLLM_IMAGE)
+else
+	docker pull $(DOCKER_VLLM_IMAGE)
+	docker tag $(DOCKER_VLLM_IMAGE) $(DOCKER_H2OGPT_VLLM_IMAGE)
 endif
 
-just_docker_build: build_info.txt git_hash.txt
-	DOCKER_BUILDKIT=1 docker build -t $(DOCKER_TEST_IMAGE) -f Dockerfile .
+docker_push:
+	docker tag $(DOCKER_H2OGPT_RUNTIME_IMAGE) gcr.io/vorvan/h2oai/h2oai-h2ogpt-runtime:$(PACKAGE_VERSION)
+	docker tag $(DOCKER_H2OGPT_VLLM_IMAGE) gcr.io/vorvan/h2oai/h2oai-h2ogpt-vllm:$(PACKAGE_VERSION)
 
-docker_build_runner: docker_build
-	-docker pull $(DOCKER_TEST_IMAGE)
-	docker tag $(DOCKER_TEST_IMAGE) gcr.io/vorvan/h2oai/h2ogpt-runtime:$(BUILD_TAG)
-	docker tag $(DOCKER_TEST_IMAGE) gcr.io/vorvan/h2oai/h2ogpt-runtime:$(PACKAGE_VERSION)
-	docker tag $(DOCKER_TEST_IMAGE) gcr.io/vorvan/h2oai/h2ogpt-runtime:latest
-	docker push gcr.io/vorvan/h2oai/h2ogpt-runtime:$(BUILD_TAG)
-	docker push gcr.io/vorvan/h2oai/h2ogpt-runtime:$(PACKAGE_VERSION)
-	docker push gcr.io/vorvan/h2oai/h2ogpt-runtime:latest
+	docker tag $(DOCKER_H2OGPT_RUNTIME_IMAGE) gcr.io/vorvan/h2oai/h2oai-h2ogpt-runtime:latest
+	docker tag $(DOCKER_H2OGPT_VLLM_IMAGE) gcr.io/vorvan/h2oai/h2oai-h2ogpt-vllm:latest
+
+	docker push gcr.io/vorvan/h2oai/h2oai-h2ogpt-runtime:$(BUILD_TAG)
+	docker push gcr.io/vorvan/h2oai/h2oai-h2ogpt-runtime:$(PACKAGE_VERSION)
+	docker push gcr.io/vorvan/h2oai/h2oai-h2ogpt-runtime:latest
+
+	docker push gcr.io/vorvan/h2oai/h2oai-h2ogpt-vllm:$(BUILD_TAG)
+	docker push gcr.io/vorvan/h2oai/h2oai-h2ogpt-vllm:$(PACKAGE_VERSION)
+	docker push gcr.io/vorvan/h2oai/h2oai-h2ogpt-vllm:latest
+
 ifdef BUILD_ID
-	docker tag $(DOCKER_TEST_IMAGE) gcr.io/vorvan/h2oai/h2ogpt-runtime:$(PACKAGE_VERSION)-$(BUILD_ID)
-	docker push gcr.io/vorvan/h2oai/h2ogpt-runtime:$(PACKAGE_VERSION)-$(BUILD_ID)
+	docker tag $(DOCKER_H2OGPT_RUNTIME_IMAGE) gcr.io/vorvan/h2oai/h2oai-h2ogpt-runtime:$(PACKAGE_VERSION)-$(BUILD_ID)
+	docker push gcr.io/vorvan/h2oai/h2oai-h2ogpt-runtime:$(PACKAGE_VERSION)-$(BUILD_ID)
+
+	docker tag $(DOCKER_H2OGPT_VLLM_IMAGE) gcr.io/vorvan/h2oai/h2oai-h2ogpt-vllm:$(PACKAGE_VERSION)-$(BUILD_ID)
+	docker push gcr.io/vorvan/h2oai/h2oai-h2ogpt-vllm:$(PACKAGE_VERSION)-$(BUILD_ID)
 endif
 
 print-%:

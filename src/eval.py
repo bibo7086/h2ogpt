@@ -11,10 +11,11 @@ from utils import clear_torch_cache, NullContext, get_kwargs, makedirs
 
 
 def run_eval(  # for local function:
-        base_model=None, lora_weights=None, inference_server=None, regenerate_clients=None, regenerate_gradio_clients=None,
-        prompt_type=None, prompt_dict=None, system_prompt=None,
+        base_model=None, lora_weights=None, inference_server=None,
+        regenerate_clients=None, regenerate_gradio_clients=None, validate_clients=None, fail_if_invalid_client=None,
+        prompt_type=None, prompt_dict=None, chat_template=None, system_prompt=None,
         debug=None, chat=False,
-        stream_output=None, async_output=None, num_async=None, stream_map=None,
+        stream_output=None, enable_caching=None, async_output=None, num_async=None, stream_map=None,
         eval_filename=None, eval_prompts_only_num=None, eval_prompts_only_seed=None, eval_as_output=None,
         examples=None, memory_restriction_level=None,
         # evaluate kwargs
@@ -24,6 +25,8 @@ def run_eval(  # for local function:
         force_seq2seq_type=None, force_t5_type=None,
         load_exllama=None,
 
+        force_streaming_on_to_handle_timeouts=None,
+
         use_pymupdf=None,
         use_unstructured_pdf=None,
         use_pypdf=None,
@@ -31,6 +34,10 @@ def run_eval(  # for local function:
         enable_pdf_doctr=None,
         enable_image=None,
         visible_image_models=None,
+        image_size=None,
+        image_quality=None,
+        image_guidance_scale=None,
+        image_num_inference_steps=None,
 
         try_pdf_as_html=None,
         # for evaluate args beyond what's already above, or things that are always dynamic and locally created
@@ -62,6 +69,8 @@ def run_eval(  # for local function:
         document_content_substrings_op=None,
         pre_prompt_query=None, prompt_query=None,
         pre_prompt_summary=None, prompt_summary=None, hyde_llm_prompt=None,
+        all_docs_start_prompt=None,
+        all_docs_finish_prompt=None,
 
         user_prompt_for_fake_system_prompt=None,
         json_object_prompt=None,
@@ -69,6 +78,10 @@ def run_eval(  # for local function:
         json_code_prompt=None,
         json_code_prompt_if_no_schema=None,
         json_schema_instruction=None,
+        json_preserve_system_prompt=None,
+        json_object_post_prompt_reminder=None,
+        json_code_post_prompt_reminder=None,
+        json_code2_post_prompt_reminder=None,
 
         image_audio_loaders=None,
         pdf_loaders=None,
@@ -120,6 +133,7 @@ def run_eval(  # for local function:
         guided_choice=None,
         guided_grammar=None,
         guided_whitespace_pattern=None,
+        client_metadata=None,
 
         # for evaluate kwargs:
         captions_model=None,
@@ -318,7 +332,7 @@ def run_eval(  # for local function:
                     if score_with_prompt:
                         data_point = dict(instruction=instruction, input=iinput, context=context)
                         prompter = Prompter(prompt_type, prompt_dict,
-                                            debug=debug, stream_output=stream_output)
+                                            debug=debug, stream_output=stream_output, base_model=base_model)
                         prompt = prompter.generate_prompt(data_point, context_from_history=False, image_file=image_file)
                     else:
                         # just raw input and output
@@ -327,7 +341,7 @@ def run_eval(  # for local function:
                             assert iinput in [None, ''], iinput  # should be no iinput
                         prompt = instruction
                     score = score_qa(smodel, stokenizer, prompt, res, memory_restriction_level=memory_restriction_level)
-                    score_dump.append(ex + [prompt, res, score])
+                    score_dump.append(ex + [prompt, res, score, sources])
                     # dump every score in case abort
                     df_scores = pd.DataFrame(score_dump,
                                              columns=eval_func_param_names +

@@ -4,7 +4,7 @@ import time
 import torch
 from transformers import StoppingCriteria, StoppingCriteriaList, GenerationConfig
 
-from enums import PromptType, t5_type
+from enums import PromptType, t5_type, extra_stop_token_ids
 
 
 def update_terminate_responses(terminate_response, tokenizer=None, trust_remote_code=True):
@@ -23,16 +23,19 @@ def update_terminate_responses(terminate_response, tokenizer=None, trust_remote_
 
         if hasattr(tokenizer, 'name_or_path') and hasattr(tokenizer, 'vocab'):
             reverse_vocab = {v: k for k, v in tokenizer.vocab.items()}
-            generate_eos_token_id = GenerationConfig.from_pretrained(tokenizer.name_or_path,
-                                                                     token=os.getenv('HUGGING_FACE_HUB_TOKEN'),
-                                                                     trust_remote_code=trust_remote_code,
+            try:
+                generate_eos_token_id = GenerationConfig.from_pretrained(tokenizer.name_or_path,
+                                                                         token=os.getenv('HUGGING_FACE_HUB_TOKEN'),
+                                                                         trust_remote_code=trust_remote_code,
 
-                                                                     ).eos_token_id
-            if isinstance(generate_eos_token_id, list):
-                for eos_token_id in generate_eos_token_id:
-                    terminate_response.extend([reverse_vocab[eos_token_id]])
-            else:
-                terminate_response.extend([reverse_vocab[generate_eos_token_id]])
+                                                                         ).eos_token_id
+                if isinstance(generate_eos_token_id, list):
+                    for eos_token_id in generate_eos_token_id:
+                        terminate_response.extend([reverse_vocab[eos_token_id]])
+                elif generate_eos_token_id is not None:
+                    terminate_response.extend([reverse_vocab[generate_eos_token_id]])
+            except OSError:
+                pass
         terminate_response_tmp = terminate_response.copy()
         terminate_response.clear()
         [terminate_response.append(x) for x in terminate_response_tmp if x not in terminate_response]
@@ -168,6 +171,7 @@ def get_stopping(prompt_type, prompt_dict, tokenizer, device, base_model,
         handle_newlines += [False] * len(stop)
 
     stop_words = update_terminate_responses(stop_words, tokenizer=tokenizer)
+    stop_words.extend(extra_stop_token_ids(base_model, as_ids=False))
 
     # get stop tokens
     stop_words_ids = [

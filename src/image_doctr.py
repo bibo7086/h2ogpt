@@ -101,7 +101,7 @@ class H2OOCRLoader(ImageCaptionLoader):
         """
         Helper function for getting the captions and metadata of an image
         """
-        from src.image_utils import pad_resize_image
+        from image_utils import pad_resize_image
         try:
             from doctr.io import DocumentFile
         except ImportError:
@@ -231,13 +231,15 @@ def space_layout(texts, boxes, threshold_show_spaces=8, threshold_char_width=0.0
             left_char_num = max((left_char_num - len(space_line_text)), 1)
 
             # verbose layout
-            # space_line_text += " " * left_char_num
-
-            # minified layout
-            if left_char_num > threshold_show_spaces:
-                space_line_text += f" <{left_char_num}> "
+            verbose_layout = True
+            if verbose_layout:
+                space_line_text += " " * left_char_num
             else:
-                space_line_text += " "
+                # minified layout
+                if left_char_num > threshold_show_spaces:
+                    space_line_text += f" <{left_char_num}> "
+                else:
+                    space_line_text += " "
 
             space_line_text += line_texts[i][j]
         space_line_texts.append(space_line_text + "\n")

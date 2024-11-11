@@ -140,7 +140,7 @@ class LangChainAction(Enum):
     IMAGE_STYLE = "ImageStyle"
 
 
-valid_imagegen_models = ['sdxl_turbo', 'sdxl', 'playv2']
+valid_imagegen_models = ['sdxl_turbo', 'sdxl', 'sd3', 'playv2', 'flux.1-dev', 'flux.1-schnell']
 valid_imagechange_models = ['sdxl_change']
 valid_imagestyle_models = ['sdxl_style']
 
@@ -191,6 +191,11 @@ gpt_token_mapping = {
     "gpt-4-turbo-2024-04-09": 128000,  # 4096 output
     "gpt-4o": 128000,  # 4096 output
     "gpt-4o-2024-05-13": 128000,  # 4096 output
+    "gpt-4o-2024-08-06": 128000,  # 4096 output
+    "gpt-4o-mini": 128000,  # 16384 output
+    # leave room for reasoning tokens
+    "o1-preview": 128000,  # 4096 output
+    "o1-mini": 128000,  # 4096 output
 }
 model_token_mapping = gpt_token_mapping.copy()
 model_token_mapping.update({
@@ -216,7 +221,11 @@ anthropic_mapping = {
     "claude-instant-1.2": 100000,
     "claude-3-opus-20240229": 200000,
     "claude-3-sonnet-20240229": 200000,
+    "claude-3-5-sonnet-20241022": 200000,
+    "claude-3-5-sonnet-latest": 200000,
+    "claude-3-5-sonnet-20240620": 200000,
     "claude-3-haiku-20240307": 200000,
+    "claude-3-5-haiku-20241022": 200000,
 }
 
 anthropic_mapping_outputs = {
@@ -226,8 +235,20 @@ anthropic_mapping_outputs = {
     "claude-instant-1.2": 4096,
     "claude-3-opus-20240229": 4096,
     "claude-3-sonnet-20240229": 4096,
+    "claude-3-5-sonnet-20240620": 8192,
+    "claude-3-5-sonnet-20241022": 8192,
+    "claude-3-5-sonnet-latest": 8192,
     "claude-3-haiku-20240307": 4096,
+    "claude-3-5-haiku-20241022": 8192,
 }
+
+anthropic_prompt_caching = ["claude-3-opus-20240229",
+                            "claude-3-5-sonnet-20241022",
+                            "claude-3-5-sonnet-latest",
+                            "claude-3-5-sonnet-20240620",
+                            "claude-3-haiku-20240307",
+                            "claude-3-5-haiku-20241022",
+                            ]
 
 claude3imagetag = 'claude-3-image'
 gpt4imagetag = 'gpt-4-image'
@@ -254,6 +275,8 @@ gemini15image_num_max = 30
 # https://github.com/anthropics/anthropic-cookbook/blob/main/multimodal/reading_charts_graphs_powerpoints.ipynb
 # 5MB per image
 claude3image_num_max = 20
+# much worse image handling for many images.  Even 3 images gets confused.
+claude3_haiku_image_num_max = 20
 # https://platform.openai.com/docs/guides/vision
 # 20MB per image request (they say per image but that's wrong)
 # gpt-4o: ValueError: Error code: 400 - {'error': {'code': 'BadRequest', 'message': 'Too many images in request. Max is 10.', 'param': None, 'type': None}}
@@ -265,21 +288,42 @@ gpt4turbo_image_num_max = 20
 llava_num_max = 10
 
 # really just limited by GPU memory, beyond 5 fails for single 80GB H100 or up to 8 images works for 2*80GB H100 before tokens run out for 1kx1k images
+# but they don't do good with multiple images, so rely upon batching and pass -2 for model_lock value or CLI value
 internvl_num_max = 5
+internvl2_num_max = 10
 
 images_num_max_dict = {'gpt-4-vision-preview': gpt4image_num_max,
-                 'gpt-4-turbo-2024-04-09': gpt4turbo_image_num_max, 'gpt-4o': gpt4turbo_image_num_max,
-                 'gemini-pro-vision': geminiimage_num_max,
-                 'gemini-1.5-pro-latest': gemini15image_num_max,
-                 'gemini-1.5-flash-latest': gemini15image_num_max,
-                 'claude-3-opus-20240229': claude3image_num_max, 'claude-3-sonnet-20240229': claude3image_num_max,
-                 'claude-3-haiku-20240307': claude3image_num_max,
-                 'liuhaotian/llava-v1.6-34b': llava_num_max, 'liuhaotian/llava-v1.6-vicuna-13b': llava_num_max,
-                 'HuggingFaceM4/idefics2-8b-chatty': 10,
-                 'lmms-lab/llama3-llava-next-8b': 2,
-                 'OpenGVLab/InternVL-Chat-V1-5': internvl_num_max,
-                 'THUDM/cogvlm2-llama3-chat-19B': 2,
-                 }
+                       'gpt-4-turbo-2024-04-09': gpt4turbo_image_num_max,
+                       'gpt-4o': gpt4turbo_image_num_max,
+                       'gpt-4o-2024-05-13': gpt4turbo_image_num_max,
+                       'gpt-4o-2024-08-06': gpt4turbo_image_num_max,
+                       'gpt-4o-mini': gpt4turbo_image_num_max,
+                       'gpt-4o-mini-2024-07-18': gpt4turbo_image_num_max,
+                       'gemini-pro-vision': geminiimage_num_max,
+                       'gemini-1.5-pro-latest': gemini15image_num_max,
+                       'gemini-1.5-flash-latest': gemini15image_num_max,
+                       'claude-3-opus-20240229': claude3image_num_max,
+                       'claude-3-sonnet-20240229': claude3image_num_max,
+                       'claude-3-5-sonnet-20240620': claude3image_num_max,
+                       'claude-3-5-sonnet-20241022': claude3image_num_max,
+                       'claude-3-5-sonnet-latest': claude3image_num_max,
+                       'claude-3-haiku-20240307': claude3_haiku_image_num_max,
+                       'claude-3-5-haiku-20241022': claude3_haiku_image_num_max,
+                       'liuhaotian/llava-v1.6-34b': 1,  # for lmdeploy
+                       'liuhaotian/llava-v1.6-vicuna-13b': 1,  # for lmdeploy
+                       'HuggingFaceM4/idefics2-8b-chatty': 10,
+                       'lmms-lab/llama3-llava-next-8b': 2,
+                       'OpenGVLab/InternVL-Chat-V1-5': internvl_num_max,
+                       'THUDM/cogvlm2-llama3-chat-19B': 2,
+                       'microsoft/Phi-3-vision-128k-instruct': 1,  # only 1 possible with vllm
+                       }
+for model_name in ["OpenGVLab/InternVL2-1B", "OpenGVLab/InternVL2-2B", "OpenGVLab/InternVL2-4B",
+                   "OpenGVLab/InternVL2-8B", "OpenGVLab/InternVL2-26B", "OpenGVLab/InternVL2-40"]:
+    images_num_max_dict[model_name] = internvl2_num_max
+
+# llava34b sometimes runs out of tokens and finishes due to token limits, let's restrict
+images_limit_max_new_tokens_list = ['liuhaotian/llava-v1.6-vicuna-13b', 'liuhaotian/llava-v1.6-34b']
+images_limit_max_new_tokens = 512
 
 # https://ai.google.dev/models/gemini
 # gemini-1.0-pro
@@ -333,11 +377,20 @@ mistralai_mapping_outputs = {
 # https://platform.openai.com/docs/guides/function-calling
 openai_supports_functiontools = ["gpt-4-0613", "gpt-4-32k-0613", "gpt-3.5-turbo-0613", "gpt-3.5-turbo-16k-0613",
                                  "gpt-4-1106-preview", "gpt-35-turbo-1106", "gpt-4-turbo-2024-04-09",
-                                 "gpt-4o", "gpt-4o-2024-05-13",
+                                 "gpt-4o", "gpt-4o-2024-05-13", "gpt-4o-2024-08-06",
+                                 "gpt-4o-mini", "gpt-4o-mini-2024-07-18",
                                  ]
 
+# https://platform.openai.com/docs/guides/function-calling/supported-models
+openai_supports_parallel_functiontools = ['gpt-4o', 'gpt-4o-2024-05-13', "gpt-4o-2024-08-06",
+                                          'gpt-4o-mini', 'gpt-4o-mini-2024-07-18',
+                                          'gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-preview',
+                                          'gpt-4-0125-preview', 'gpt-4-1106-preview', 'gpt-3.5-turbo-0125',
+                                          'gpt-3.5-turbo-1106']
+
 openai_supports_json_mode = ["gpt-4-1106-preview", "gpt-35-turbo-1106", "gpt-4-turbo-2024-04-09",
-                             "gpt-4o", "gpt-4o-2024-05-13",
+                             "gpt-4o", "gpt-4o-2024-05-13", "gpt-4o-2024-08-06",
+                             "gpt-4o-mini", 'gpt-4o-mini-2024-07-18',
                              ]
 
 # https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models#model-summary-table-and-region-availability
@@ -349,6 +402,12 @@ model_token_mapping_outputs.update({"gpt-4-1106-preview": 4096,
                                     "gpt-4-turbo-2024-04-09": 4096,
                                     "gpt-4o": 4096,
                                     "gpt-4o-2024-05-13": 4096,
+                                    "gpt-4o-2024-08-06": 4096,
+                                    "gpt-4o-mini": 16384,
+                                    "gpt-4o-mini-2024-07-18": 16384,
+                                    # deduces expected reasoning tokens
+                                    "o1-preview": 32768 - 25000,
+                                    "o1-mini": 65536 - 25000,
                                     }
                                    )
 
@@ -356,12 +415,16 @@ groq_mapping = {
     "mixtral-8x7b-32768": 32768,
     "gemma-7b-it": 8192,
     "llama2-70b-4096": 4096,
+    "llama-3.1-70b-versatile": 4096,
+    "llama-3.1-8b-instant": 4096,
 }
 
 groq_mapping_outputs = {
     "mixtral-8x7b-32768": 32768,
     "gemma-7b-it": 4096,
     "llama2-70b-4096": 4096,
+    "llama-3.1-70b-versatile": 131072,
+    "llama-3.1-8b-instant": 131072,
 }
 
 
@@ -383,15 +446,81 @@ def is_vision_model(base_model, all_visible_models=[], visible_vision_models=[])
     return is_gradio_vision_model(base_model) or \
         base_model.startswith('claude-3-') or \
         base_model in ['gpt-4-vision-preview', 'gpt-4-1106-vision-preview', 'gpt-4-turbo-2024-04-09', 'gpt-4o',
-                       'gpt-4o-2024-05-13'] or \
+                       'gpt-4o-2024-05-13', 'gpt-4o-mini', 'gpt-4o-mini-2024-07-18'] or \
         base_model in ["gemini-pro-vision", "gemini-1.0-pro-vision-latest", "gemini-1.5-pro-latest",
                        "gemini-1.5-flash-latest"] or \
         base_model in ["HuggingFaceM4/idefics2-8b-chatty", "HuggingFaceM4/idefics2-8b-chat"] or \
         base_model in ["lmms-lab/llama3-llava-next-8b", "lmms-lab/llava-next-110b", "lmms-lab/llava-next-72b"] or \
         base_model in ["OpenGVLab/InternVL-Chat-V1-5", "OpenGVLab/Mini-InternVL-Chat-2B-V1-5",
-                       "OpenGVLab/Mini-InternVL-Chat-4B-V1-5", "OpenGVLab/InternVL-Chat-V1-5-Int8"] or \
+                       "OpenGVLab/Mini-InternVL-Chat-4B-V1-5", "OpenGVLab/InternVL-Chat-V1-5-Int8",
+                       "OpenGVLab/InternVL2-1B", "OpenGVLab/InternVL2-2B", "OpenGVLab/InternVL2-4B",
+                       "OpenGVLab/InternVL2-8B", "OpenGVLab/InternVL2-26B", "OpenGVLab/InternVL2-40",
+                       "OpenGVLab/InternVL2-Llama3-76B",
+                       "OpenGVLab/InternVL2-40B-AWQ", "OpenGVLab/InternVL2-26B-AWQ", "OpenGVLab/InternVL2-8B-AWQ",
+                       "OpenGVLab/InternVL2-2B-AWQ",
+                       "OpenGVLab/InternVL2-Llama3-76B-AWQ"] or \
         base_model in ["THUDM/cogvlm2-llama3-chat-19B", "THUDM/cogvlm2-llama3-chinese-chat-19B",
-                       "THUDM/cogvlm2-llama3-chat-19B-int4", "THUDM/cogvlm2-llama3-chinese-chat-19B-int4"]
+                       "THUDM/cogvlm2-llama3-chat-19B-int4", "THUDM/cogvlm2-llama3-chinese-chat-19B-int4"] or \
+        base_model in ["microsoft/Phi-3-vision-128k-instruct"] or \
+        base_model in ['liuhaotian/llava-v1.6-34b', 'liuhaotian/llava-v1.6-vicuna-13b']
+
+
+# https://github.com/vllm-project/vllm/issues/7628
+# https://github.com/vllm-project/vllm/blob/ce143353c622318a9abf113bebee1cfebc274e0f/examples/offline_inference_vision_language.py#L126-L148
+def extra_stop_token_ids(base_model, tokenizer=None, as_ids=False):
+    if base_model is None:
+        return []
+    assert tokenizer is not None or not as_ids
+    if base_model in ["OpenGVLab/InternVL-Chat-V1-5", "OpenGVLab/Mini-InternVL-Chat-2B-V1-5",
+                      "OpenGVLab/Mini-InternVL-Chat-4B-V1-5", "OpenGVLab/InternVL-Chat-V1-5-Int8",
+                      "OpenGVLab/InternVL2-1B", "OpenGVLab/InternVL2-2B", "OpenGVLab/InternVL2-4B",
+                      "OpenGVLab/InternVL2-8B", "OpenGVLab/InternVL2-26B", "OpenGVLab/InternVL2-40",
+                      "OpenGVLab/InternVL2-Llama3-76B",
+                      "OpenGVLab/InternVL2-40B-AWQ", "OpenGVLab/InternVL2-26B-AWQ", "OpenGVLab/InternVL2-8B-AWQ",
+                      "OpenGVLab/InternVL2-2B-AWQ",
+                      "OpenGVLab/InternVL2-Llama3-76B-AWQ"]:
+        words = ["<|endoftext|>", "<|im_start|>", "<|im_end|>", "<|end|>"]
+        if as_ids:
+            return tokenizer.encode(words, add_special_tokens=False)
+        else:
+            return words
+    return []
+
+
+def tokens_per_image(base_model):
+    if not is_vision_model(base_model):
+        return 0
+    if base_model.startswith('claude-3-'):
+        return claude3_image_tokens
+    elif base_model in ['gpt-4-vision-preview', 'gpt-4-1106-vision-preview', 'gpt-4-turbo-2024-04-09', 'gpt-4o',
+                        'gpt-4o-2024-05-13', 'gpt-4o-mini', 'gpt-4o-mini-2024-07-18']:
+        return gpt4_image_tokens
+    elif base_model in ["gemini-pro-vision", "gemini-1.0-pro-vision-latest", "gemini-1.5-pro-latest",
+                        "gemini-1.5-flash-latest"]:
+        return gemini_image_tokens
+    elif base_model in ["HuggingFaceM4/idefics2-8b-chatty", "HuggingFaceM4/idefics2-8b-chat"]:
+        return 512
+    elif base_model in ["lmms-lab/llama3-llava-next-8b", "lmms-lab/llava-next-110b", "lmms-lab/llava-next-72b"]:
+        return llava16_image_tokens
+    elif base_model in ["OpenGVLab/InternVL-Chat-V1-5", "OpenGVLab/Mini-InternVL-Chat-2B-V1-5",
+                        "OpenGVLab/Mini-InternVL-Chat-4B-V1-5", "OpenGVLab/InternVL-Chat-V1-5-Int8",
+                        "OpenGVLab/InternVL2-1B", "OpenGVLab/InternVL2-2B", "OpenGVLab/InternVL2-4B",
+                        "OpenGVLab/InternVL2-8B", "OpenGVLab/InternVL2-26B", "OpenGVLab/InternVL2-40",
+                        "OpenGVLab/InternVL2-Llama3-76B",
+                        "OpenGVLab/InternVL2-40B-AWQ", "OpenGVLab/InternVL2-26B-AWQ", "OpenGVLab/InternVL2-8B-AWQ",
+                        "OpenGVLab/InternVL2-2B-AWQ",
+                        "OpenGVLab/InternVL2-Llama3-76B-AWQ"]:
+        return 1024
+    elif base_model in ["THUDM/cogvlm2-llama3-chat-19B", "THUDM/cogvlm2-llama3-chinese-chat-19B",
+                        "THUDM/cogvlm2-llama3-chat-19B-int4", "THUDM/cogvlm2-llama3-chinese-chat-19B-int4"]:
+        return 1500
+    elif base_model in ["microsoft/Phi-3-vision-128k-instruct"]:
+        return 1024
+    elif base_model in ['liuhaotian/llava-v1.6-34b', 'liuhaotian/llava-v1.6-vicuna-13b']:
+        return llava16_image_tokens
+    else:
+        # safety net
+        return 1500
 
 
 def is_video_model(base_model):
@@ -430,6 +559,8 @@ def is_json_model(base_model, inference_server, json_vllm=False):
     if inference_server.startswith('anthropic'):
         # but no streaming
         return base_model.startswith('claude-3')
+    if inference_server.startswith('google'):
+        return base_model in ["gemini-1.5-pro-latest", "gemini-1.5-flash-latest"]
     return False
 
 
@@ -458,7 +589,7 @@ def does_support_json_mode(inference_server, model_name, json_vllm=False):
         # assume OpenAI serves updated models
         return True
     else:
-        return is_json_model(model_name, inference_server, json_vllm=False)
+        return is_json_model(model_name, inference_server, json_vllm=json_vllm)
 
 
 font_size = 2
@@ -482,8 +613,6 @@ def t5_type(model_name):
 
 
 def get_langchain_prompts(pre_prompt_query, prompt_query, pre_prompt_summary, prompt_summary, hyde_llm_prompt,
-                          model_name, inference_server, model_path_llama,
-                          doc_json_mode,
                           prompt_query_type='simple'):
     if prompt_query_type == 'advanced':
         pre_prompt_query1 = "Pay attention and remember the information below, which will help to answer the question or imperative after the context ends.  If the answer cannot be primarily obtained from information within the context, then respond that the answer does not appear in the context of the documents."
@@ -491,7 +620,7 @@ def get_langchain_prompts(pre_prompt_query, prompt_query, pre_prompt_summary, pr
     else:
         # older smaller models get confused by this prompt, should use "" instead, but not focusing on such old models anymore, complicates code too much
         pre_prompt_query1 = "Pay attention and remember the information below, which will help to answer the question or imperative after the context ends."
-        prompt_query1 = "According to only the information in the document sources provided within the context above, write an insightful and well-structured response to: "
+        prompt_query1 = """According to only the information in any chat history, any images given, or any document text provided within the context above, give a well-structured response (that starts with "According to") to:"""
 
     pre_prompt_summary1 = """In order to write a concise summary, pay attention to the following text."""
     prompt_summary1 = "Using only the information in the document sources above, write a condensed and concise well-structured Markdown summary of key results."
@@ -560,13 +689,13 @@ def gr_to_lg(image_audio_loaders,
         enable_ocr='OCR' in image_audio_loaders,
         enable_doctr='DocTR' in image_audio_loaders,
         enable_pix2struct='Pix2Struct' in image_audio_loaders,
-        enable_captions='Caption' in image_audio_loaders or 'CaptionBlip2' in image_audio_loaders,
+        enable_captions='Caption' in image_audio_loaders or 'CaptionLarge' in image_audio_loaders,
         enable_transcriptions="ASR" in image_audio_loaders or 'ASRLarge' in image_audio_loaders,
         enable_llava='LLaVa' in image_audio_loaders,
     )
-    if 'CaptionBlip2' in image_audio_loaders:
+    if 'CaptionLarge' in image_audio_loaders:
         # just override, don't actually do both even if user chose both
-        captions_model = "Salesforce/blip2-flan-t5-xl"
+        captions_model = "microsoft/Florence-2-large"
     else:
         captions_model = kwargs['captions_model']
     if 'ASRLarge' in image_audio_loaders:
@@ -665,7 +794,7 @@ Respond absolutely only in valid JSON with elaborate and well-structured text fo
 """
 # "Web references" : str array // Up to 3 most relevant HTML links used to justify the response.
 
-max_input_tokens_public = 3100
+max_input_tokens_public = 6000
 max_input_tokens_public_api = 2 * max_input_tokens_public  # so can exercise bit longer context models
 
 max_total_input_tokens_public = 4096 * 2
@@ -676,7 +805,7 @@ max_top_k_docs_public_api = 2 * max_top_k_docs_public
 
 max_top_k_docs_default = 10
 
-max_docs_public = 5
+max_docs_public = 10
 max_docs_public_api = 2 * max_docs_public
 
 max_chunks_per_doc_public = 5000
@@ -688,9 +817,36 @@ json_object_prompt_simpler0 = 'Ensure your response is strictly valid JSON text.
 json_code_prompt0 = 'Ensure your entire response is outputted as strict valid JSON inside a code block with the json language identifier.'
 json_code_prompt_if_no_schema0 = 'Ensure all JSON keys are less than 64 characters, and ensure JSON key names are made of only alphanumerics, underscores, or hyphens.'
 json_schema_instruction0 = 'Ensure you follow this JSON schema, and ensure to use the same key names as the schema:\n```json\n{properties_schema}\n```'
+json_object_post_prompt_reminder0 = 'Ensure your response is strictly valid JSON text.'
+json_code_post_prompt_reminder0 = 'Ensure your response satisfies the schema mentioned above and place the response inside JSON code block.  Do not just repeat the JSON schema, ensure your response uses that schema to respond by choosing particular values for each type.'
+json_code2_post_prompt_reminder0 = 'Ensure your response is inside a JSON code block.'
 
-image_batch_image_prompt0 = 'According to the text and other content in the image, '
-image_batch_final_prompt0 = 'According to the text and answers from the images (ignoring image answers that had no answer, but giving details from images that did have an answer), give a well-structured response to: '
+image_batch_image_prompt0 = """
+<response_instructions>
+- Act as a keen observer with a sharp eye for detail.
+- Analyze the content within the images.
+- Provide insights based on your observations.
+- Avoid making up facts.
+- Do not forget to follow the system prompt.
+</response_instructions>
+"""
+
+image_batch_final_prompt0 = """<response_instructions>
+- Check if the answers already given in <image> XML tags are useful.
+  - Image answers came from a vision model capable of reading text and images within the images.
+  - If image answers are useful, preserve all details the image answers provide and use them to construct a well-structured answer.
+- Ignore image answers that had no useful content, because any single batch of images may not be relevant. Focus on all details from image answers that are relevant and useful.
+- Check if the document text can answer the question.
+- Check if the chat history can answer the question.
+- Check if any figure captions can answer the question.
+- If answers conflict between text, chat history, and figure captions, do not focus your response on this conflict.
+  - In handling conflicting answers, use logical reasoning and supporting evidence to assess the plausibility of each answer.
+  - In handling conflicting answers, choose the most consistent answer -- i.e., the most common answer among conflicts (self-consistency reasoning) or one that aligns with well-established facts.
+  - In handling conflicting answers, one may choose one data source over another -- i.e., text is probably more reliable than an image when the question can be answered from text, while an image is more reliable than text for flowcharts, photos, etc.
+- Do not forget to follow the system prompt.
+- Finally, according to our chat history, the above documents, figure captions, or given images, construct a well-structured response.
+</response_instructions>
+"""
 
 coqui_lock_name = 'coqui'
 
@@ -723,3 +879,74 @@ roles_state0 = dict()
 none = ['', '\n', None]
 nonelist = [None, '', 'None']
 noneset = set(nonelist)
+
+llamacpp_inner_dict_keys = ['model_path_llama', 'model_name_gptj', 'model_name_gpt4all_llama',
+                            'model_name_exllama_if_no_config']
+
+other_model_state_defaults0 = dict(load_8bit=None, load_4bit=None, low_bit_mode=None,
+                                   load_half=None, use_flash_attention_2=None,
+                                   load_gptq=None, load_awq=None, load_exllama=None,
+                                   use_safetensors=None,
+                                   revision=None, use_gpu_id=None, gpu_id=None,
+                                   compile_model=None,
+                                   use_cache=None,
+                                   llamacpp_dict=dict(model_path_llama=''),
+                                   rope_scaling=None,
+                                   max_seq_len=None,
+                                   max_output_seq_len=None,
+                                   exllama_dict={},
+                                   gptq_dict={},
+                                   attention_sinks={},
+                                   sink_dict={},
+                                   truncation_generation=None,
+                                   hf_model_dict={},
+                                   force_seq2seq_type=None,
+                                   force_t5_type=None,
+                                   trust_remote_code=None,
+                                   )
+
+model_state_none0 = dict(model=None, tokenizer=None, device=None,
+                         base_model=None, base_model0=None, tokenizer_base_model=None, lora_weights=None,
+                         inference_server='', prompt_type='unknown', prompt_dict=None, chat_template=None,
+                         visible_models=None, h2ogpt_key=None,
+                         json_vllm=None,
+                         is_vision_model=None,
+                         is_actually_vision_model=None,
+                         images_num_max=None,
+                         image_resolution=None,
+                         image_format=None,
+                         rotate_align_resize_image=None,
+                         video_frame_period=None,
+                         image_batch_image_prompt=None,
+                         image_batch_final_prompt=None,
+                         image_batch_stream=None,
+                         visible_vision_models=None,
+                         auto_visible_vision_models=None,
+                         json=None,
+                         guided_vllm=None,
+                         video_file=None,
+                         display_name=None,
+                         )
+
+
+IMAGE_EXTENSIONS = {'.png': 'PNG', '.apng': 'PNG', '.blp': 'BLP', '.bmp': 'BMP', '.dib': 'DIB', '.bufr': 'BUFR',
+                    '.cur': 'CUR', '.pcx': 'PCX', '.dcx': 'DCX', '.dds': 'DDS',
+                    # '.ps': 'EPS', '.eps': 'EPS',
+                    '.fit': 'FITS', '.fits': 'FITS', '.fli': 'FLI', '.flc': 'FLI', '.fpx': 'FPX', '.ftc': 'FTEX',
+                    '.ftu': 'FTEX', '.gbr': 'GBR', '.gif': 'GIF', '.grib': 'GRIB',
+                    # '.h5': 'HDF5', '.hdf': 'HDF5',
+                    '.jp2': 'JPEG2000', '.j2k': 'JPEG2000', '.jpc': 'JPEG2000', '.jpf': 'JPEG2000', '.jpx': 'JPEG2000',
+                    '.j2c': 'JPEG2000', '.icns': 'ICNS', '.ico': 'ICO', '.im': 'IM', '.iim': 'IPTC', '.jfif': 'JPEG',
+                    '.jpe': 'JPEG', '.jpg': 'JPEG', '.jpeg': 'JPEG', '.tif': 'TIFF', '.tiff': 'TIFF', '.mic': 'MIC',
+                    #'.mpg': 'MPEG', '.mpeg': 'MPEG',
+                    '.mpo': 'MPO', '.msp': 'MSP', '.palm': 'PALM', '.pcd': 'PCD',
+                    #'.pdf': 'PDF',
+                     '.pxr': 'PIXAR', '.pbm': 'PPM', '.pgm': 'PPM', '.ppm': 'PPM', '.pnm': 'PPM',
+                    '.psd': 'PSD', '.qoi': 'QOI', '.bw': 'SGI', '.rgb': 'SGI', '.rgba': 'SGI', '.sgi': 'SGI',
+                    '.ras': 'SUN', '.tga': 'TGA', '.icb': 'TGA', '.vda': 'TGA', '.vst': 'TGA', '.webp': 'WEBP',
+                    '.wmf': 'WMF', '.emf': 'WMF', '.xbm': 'XBM', '.xpm': 'XPM'}
+
+VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm'}
+
+
+max_stream_string_for_json = 1000

@@ -4,29 +4,34 @@ import json
 import os
 import types
 import uuid
-from typing import Any, Dict, List, Union, Optional, Tuple, Mapping
+from typing import Any, Dict, List, Union, Optional, Tuple, Mapping, Iterator
 import time
 import queue
 import pathlib
 from datetime import datetime
 
+import numpy as np
 from langchain.schema import BasePromptTemplate
 from langchain.chains import LLMChain
 from langchain.chains import MapReduceDocumentsChain, StuffDocumentsChain, ReduceDocumentsChain
 from langchain.chains.combine_documents.base import BaseCombineDocumentsChain
 from langchain.chains.summarize import map_reduce_prompt, LoadingCallable
-from langchain.chains.summarize.chain import _load_stuff_chain, _load_refine_chain, _load_map_reduce_chain
+from langchain.chains.summarize.chain import _load_stuff_chain, _load_refine_chain
 from langchain.schema.language_model import BaseLanguageModel
+from langchain_community.document_loaders.parsers.pdf import extract_from_images_with_rapidocr
+from langchain_community.document_loaders.pdf import BasePDFLoader
 from langchain_community.embeddings import HuggingFaceHubEmbeddings
+from langchain_core.document_loaders import BaseBlobParser
+from langchain_community.document_loaders.blob_loaders import Blob
 from langchain_text_splitters import TextSplitter
 
-from src.enums import docs_joiner_default
-from src.utils import hash_file, get_sha, split_list, makedirs, flatten_list, get_token_count, get_docs_tokens, \
+from enums import docs_joiner_default
+from utils import hash_file, get_sha, split_list, makedirs, flatten_list, get_token_count, get_docs_tokens, \
     FakeTokenizer
 
 from langchain.callbacks.base import BaseCallbackHandler, Callbacks
 from langchain.schema import LLMResult
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.docstore.document import Document
 
 
@@ -125,10 +130,11 @@ class H2OCharacterTextSplitter(RecursiveCharacterTextSplitter):
 
 
 def select_docs_with_score(docs_with_score, top_k_docs, one_doc_size):
-    if top_k_docs > 0:
+    if one_doc_size is not None and len(docs_with_score) > 0:
+        doc1 = Document(page_content=docs_with_score[0][0].page_content[:one_doc_size], metadata=docs_with_score[0][0].metadata)
+        docs_with_score = [(doc1, docs_with_score[0][1])]
+    elif top_k_docs > 0:
         docs_with_score = docs_with_score[:top_k_docs]
-    elif one_doc_size is not None:
-        docs_with_score = [(docs_with_score[0][:one_doc_size], docs_with_score[0][1])]
     else:
         # do nothing
         pass
@@ -177,14 +183,14 @@ def split_merge_docs(docs_with_score, tokenizer=None, max_input_tokens=None, doc
         # skip split if not necessary, since expensive for some reason
         text_splitter1 = H2OCharacterTextSplitter.from_huggingface_tokenizer(
             tokenizer, chunk_size=doc_chunk_size, chunk_overlap=0,
-            separators=[". "],
+            separators=[". "], strip_whitespace=False,
         )
         text_splitter2 = H2OCharacterTextSplitter.from_huggingface_tokenizer(
-            tokenizer, chunk_size=doc_chunk_size, chunk_overlap=0,
+            tokenizer, chunk_size=doc_chunk_size, chunk_overlap=0, strip_whitespace=False,
         )
         # https://python.langchain.com/v0.1/docs/modules/data_connection/document_transformers/recursive_text_splitter/
         text_splitter3 = H2OCharacterTextSplitter.from_huggingface_tokenizer(
-            tokenizer, chunk_size=doc_chunk_size, chunk_overlap=0,
+            tokenizer, chunk_size=doc_chunk_size, chunk_overlap=0, strip_whitespace=False,
             separators=[
                 "\n\n",
                 "\n",
@@ -199,8 +205,10 @@ def split_merge_docs(docs_with_score, tokenizer=None, max_input_tokens=None, doc
                 "",
             ],
         )
+        text_splitter4 = RecursiveCharacterTextSplitter(chunk_size=4 * doc_chunk_size, chunk_overlap=0)
+
         text_splitters = dict(semantic=text_splitter0, sentence=text_splitter1, normal=text_splitter2,
-                              multilingual=text_splitter3)
+                              multilingual=text_splitter3, backup=text_splitter4)
         text_splitters = {k: v for k, v in text_splitters.items() if v is not None}
 
         did_split = False
@@ -256,12 +264,14 @@ def split_merge_docs(docs_with_score, tokenizer=None, max_input_tokens=None, doc
             new_metadata = docs_with_score1[0][0].metadata.copy()
             # keep source as single file so can look up, leave source_merged with joined version
             if len(docs_with_score1) > 1:
-                [new_metadata.update({'source_merged_%s' % xi: x[0].metadata['source']}) for xi, x in enumerate(docs_with_score1)]
+                [new_metadata.update({'source_merged_%s' % xi: x[0].metadata['source']}) for xi, x in
+                 enumerate(docs_with_score1)]
             new_metadata['source'] = [x[0].metadata['source'] for x in docs_with_score1][0]
             doc1 = Document(page_content=new_page_content, metadata=new_metadata)
             docs_with_score_new.append((doc1, new_score))
 
-            if did_split:
+            strict_fail = False  # don't strictly fail, sometimes can't split due to separators, so best can
+            if strict_fail and did_split:
                 assert one_doc_size is None or one_doc_size == 0, "Split failed: %s" % one_doc_size
             elif one_doc_size is not None:
                 # chopped
@@ -335,7 +345,7 @@ def _chunk_sources(sources, chunk=True, chunk_size=512, language=None, db_type=N
         # currently in order, but when pull from db won't be, so mark order and document by hash
         [x.metadata.update(dict(chunk_id=chunk_id)) for chunk_id, x in enumerate(source_chunks)]
 
-    if db_type in ['chroma', 'chroma_old']:
+    if chunk and db_type in ['chroma', 'chroma_old']:
         # also keep original source for summarization and other tasks
 
         # assign chunk_id=-1 for original content
@@ -714,3 +724,196 @@ def make_sources_file(langchain_mode, source_files_added):
     with open(sources_file, "wt", encoding="utf-8") as f:
         f.write(source_files_added)
     return sources_file
+
+
+from google.ai.generativelanguage_v1beta.types import Schema, Type
+from typing import Dict, Any, Union
+
+
+def convert_to_genai_schema(json_schema: Union[Dict[str, Any], str], name: str = "Root") -> Schema:
+    if isinstance(json_schema, str):
+        return Schema(type_=Type.STRING, description=name)
+
+    if not isinstance(json_schema, dict):
+        raise ValueError(f"Unsupported schema type: {type(json_schema)}")
+
+    schema_type = json_schema.get("type")
+
+    if schema_type == "object":
+        return convert_object_schema(json_schema, name)
+    elif schema_type == "array":
+        return convert_array_schema(json_schema, name)
+    elif schema_type in ["string", "number", "integer", "boolean"]:
+        return convert_primitive_schema(json_schema, name)
+    else:
+        return Schema(type_=Type.UNSPECIFIED, description=name)
+
+
+def convert_object_schema(json_schema: Dict[str, Any], name: str) -> Schema:
+    properties = json_schema.get("properties", {})
+    required = json_schema.get("required", [])
+
+    schema_properties = {}
+
+    for prop, details in properties.items():
+        schema_properties[prop] = convert_to_genai_schema(details, prop)
+
+        if "nullable" in details:
+            schema_properties[prop].nullable = details["nullable"]
+
+    return Schema(
+        type_=Type.OBJECT,
+        properties=schema_properties,
+        required=required,
+        description=json_schema.get("description", name)
+    )
+
+
+def convert_array_schema(json_schema: Dict[str, Any], name: str) -> Schema:
+    items = json_schema.get("items", {})
+    return Schema(
+        type_=Type.ARRAY,
+        items=convert_to_genai_schema(items, f"{name}Item"),
+        description=json_schema.get("description", name)
+    )
+
+
+def convert_primitive_schema(json_schema: Dict[str, Any], name: str) -> Schema:
+    schema_type = json_schema["type"]
+    schema_args = {
+        "description": json_schema.get("description", name),
+        "nullable": json_schema.get("nullable", False)
+    }
+
+    if schema_type == "string":
+        schema_args["type_"] = Type.STRING
+        if "enum" in json_schema:
+            schema_args["enum"] = json_schema["enum"]
+        if "format" in json_schema:
+            schema_args["format_"] = json_schema["format"]
+    elif schema_type == "number":
+        schema_args["type_"] = Type.NUMBER
+        schema_args["format_"] = json_schema.get("format", "float")
+    elif schema_type == "integer":
+        schema_args["type_"] = Type.INTEGER
+        schema_args["format_"] = json_schema.get("format", "int32")
+    elif schema_type == "boolean":
+        schema_args["type_"] = Type.BOOLEAN
+
+    return Schema(**schema_args)
+
+
+class PyMuPDF4LLMLoader(BasePDFLoader):
+    """Load `PDF` files using `PyMuPDF4LLM`."""
+
+    def __init__(
+            self,
+            file_path: str,
+            *,
+            headers: Optional[Dict] = None,
+            extract_images: bool = False,
+            **kwargs: Any,
+    ) -> None:
+        """Initialize with a file path."""
+        try:
+            import fitz  # noqa:F401
+        except ImportError:
+            raise ImportError(
+                "`PyMuPDF` package not found, please install it with "
+                "`pip install pymupdf`"
+            )
+        super().__init__(file_path, headers=headers)
+        self.extract_images = extract_images
+        self.text_kwargs = kwargs
+
+    def _lazy_load(self, **kwargs: Any) -> Iterator[Document]:
+        if kwargs:
+            logger.warning(
+                f"Received runtime arguments {kwargs}. Passing runtime args to `load`"
+                f" is deprecated. Please pass arguments during initialization instead."
+            )
+
+        text_kwargs = {**self.text_kwargs, **kwargs}
+        parser = PyMuPDF4LLMParser(
+            text_kwargs=text_kwargs, extract_images=self.extract_images
+        )
+        if self.web_path:
+            blob = Blob.from_data(open(self.file_path, "rb").read(), path=self.web_path)  # type: ignore[attr-defined]
+        else:
+            blob = Blob.from_path(self.file_path)  # type: ignore[attr-defined]
+        yield from parser.lazy_parse(blob)
+
+    def load(self, **kwargs: Any) -> List[Document]:
+        return list(self._lazy_load(**kwargs))
+
+    def lazy_load(self) -> Iterator[Document]:
+        yield from self._lazy_load()
+
+
+class PyMuPDF4LLMParser(BaseBlobParser):
+    """Parse `PDF` using `PyMuPDF4LLM`."""
+
+    def __init__(
+            self,
+            text_kwargs: Optional[Mapping[str, Any]] = None,
+            extract_images: bool = False,
+    ) -> None:
+        """Initialize the parser.
+
+        Args:
+            text_kwargs: Keyword arguments to pass to ``fitz.Page.get_text()``.
+        """
+        self.text_kwargs = text_kwargs or {}
+        self.extract_images = extract_images
+
+    def lazy_parse(self, blob: Blob) -> Iterator[Document]:  # type: ignore[valid-type]
+        """Lazily parse the blob."""
+        import pymupdf4llm
+
+        with blob.as_bytes_io() as file_path:  # type: ignore[attr-defined]
+            docllm = pymupdf4llm.to_markdown(file_path, page_chunks=True)
+            import fitz
+            if blob.data is None:  # type: ignore[attr-defined]
+                doc = fitz.open(file_path)
+            else:
+                doc = fitz.open(stream=file_path, filetype="pdf")
+            yield from [
+                Document(
+                    page_content=pagellm.get('text', '')
+                                 + self._extract_images_from_page(doc, page),
+                    metadata=dict(
+                        {
+                            "source": blob.source,  # type: ignore[attr-defined]
+                            "file_path": blob.source,  # type: ignore[attr-defined]
+                            "page": page.number,
+                            "total_pages": len(doc),
+                        },
+                        **{
+                            k: doc.metadata[k]
+                            for k in doc.metadata
+                            if type(doc.metadata[k]) in [str, int]
+                        },
+                    ),
+                )
+                for pagellm, page in zip(docllm, doc)
+            ]
+
+    def _extract_images_from_page(
+            self, doc, page
+    ) -> str:
+        """Extract images from page and get the text with RapidOCR."""
+        if not self.extract_images:
+            return ""
+
+        import fitz
+        img_list = page.get_images()
+        imgs = []
+        for img in img_list:
+            xref = img[0]
+            pix = fitz.Pixmap(doc, xref)
+            imgs.append(
+                np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+                    pix.height, pix.width, -1
+                )
+            )
+        return extract_from_images_with_rapidocr(imgs)

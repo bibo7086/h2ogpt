@@ -22,7 +22,34 @@ apt-get update && apt-get install -y \
     libtesseract-dev \
     libreoffice \
     autoconf \
-    libtool
+    libtool \
+    docker.io \
+    nodejs \
+    npm \
+    zip \
+    unzip \
+    htop \
+    tree \
+    tmux \
+    jq \
+    net-tools \
+    nmap \
+    ncdu \
+    mtr \
+    rsync \
+    build-essential \
+    parallel \
+    bc \
+    pv \
+    expect \
+    cron \
+    at \
+    screen \
+    inotify-tools \
+    jq \
+    xmlstarlet \
+    dos2unix \
+    ssh
 
 # Run upgrades
 apt-get upgrade -y
@@ -40,10 +67,12 @@ wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && \
 
 # if building for CPU, would remove CMAKE_ARGS and avoid GPU image as base image
 # Choose llama_cpp_python ARGS for your system according to [llama_cpp_python backend documentation](https://github.com/abetlen/llama-cpp-python?tab=readme-ov-file#supported-backends), e.g. for CUDA:
-export LLAMA_CUBLAS=1
-export CMAKE_ARGS="-DLLAMA_CUBLAS=on -DCMAKE_CUDA_ARCHITECTURES=all"
+export GGML_CUDA=1
+export CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=all"
+# for Metal MAC M1/M2 comment out above two lines and uncomment out the below line
+# export CMAKE_ARGS="-DLLAMA_METAL=on"
 export FORCE_CMAKE=1
-
+export GPLOK=1
 bash docs/linux_install.sh
 
 chmod -R a+rwx /h2ogpt_conda
@@ -83,34 +112,18 @@ for enc in model_encodings:
 print('Done!')
 "
 
-############################################################
-# vllm server
-export VLLM_CACHE=/workspace/.vllm_cache
-conda create -n vllm -y
+# Open Web UI
+conda create -n open-webui -y
 source /h2ogpt_conda/etc/profile.d/conda.sh
-conda activate vllm
-conda install python=3.10 -y
-echo "vLLM conda env: $CONDA_DEFAULT_ENV"
+conda activate open-webui
+conda install python=3.11 -y
+echo "open-webui conda env: $CONDA_DEFAULT_ENV"
 
-# gputil is for rayWorker in vllm to run as non-root
-# below required outside docker:
-# apt-get install libnccl2
-python -m pip install vllm==0.4.0.post1
-python -m pip install gputil==1.4.0 hf_transfer==0.1.6
-python -m pip install flash-attn==2.5.6 --no-build-isolation --no-deps --no-cache-dir
-
-# pip install hf_transfer
-# pip install tiktoken accelerate flash_attn
-mkdir $VLLM_CACHE
 chmod -R a+rwx /h2ogpt_conda
-
-# Make sure old python location works in case using scripts from old documentation
-mkdir -p /h2ogpt_conda/vllm_env/bin/
-ln -s /h2ogpt_conda/envs/vllm/bin/python3.10 /h2ogpt_conda/vllm_env/bin/python3.10
+pip install https://h2o-release.s3.amazonaws.com/h2ogpt/open_webui-0.3.8-py3-none-any.whl
 
 # Track build info
 cp /workspace/build_info.txt /build_info.txt
-cp /workspace/git_hash.txt /git_hash.txt
 
 mkdir -p /workspace/save
 chmod -R a+rwx /workspace/save

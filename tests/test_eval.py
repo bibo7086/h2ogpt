@@ -79,7 +79,7 @@ def run_eval1(cpu=False, bits=None, base_model='h2oai/h2ogpt-oig-oasst1-512-6_9b
     kwargs = dict(
         stream_output=False, prompt_type=prompt_type, prompt_dict='',
         temperature=0.4, top_p=0.85, top_k=70, penalty_alpha=0.0, num_beams=1, max_new_tokens=256,
-        min_new_tokens=0, early_stopping=False, max_time=180, repetition_penalty=1.07,
+        min_new_tokens=0, early_stopping=False, max_time=180, repetition_penalty=1.0,
         num_return_sequences=1, do_sample=True, seed=0, chat=False,
         langchain_mode=langchain_mode, add_chat_history_to_context=True,
         add_search_to_context=False,
@@ -138,6 +138,8 @@ def run_eval1(cpu=False, bits=None, base_model='h2oai/h2ogpt-oig-oasst1-512-6_9b
                  'pre_prompt_summary': None,
                  'prompt_summary': None,
                  'hyde_llm_prompt': None,
+                 'all_docs_start_prompt': None,
+                 'all_docs_finish_prompt': None,
 
                  "user_prompt_for_fake_system_prompt": None,
                  "json_object_prompt": None,
@@ -145,6 +147,10 @@ def run_eval1(cpu=False, bits=None, base_model='h2oai/h2ogpt-oig-oasst1-512-6_9b
                  "json_code_prompt": None,
                  "json_code_prompt_if_no_schema": None,
                  "json_schema_instruction": None,
+                 "json_preserve_system_prompt": None,
+                 "json_object_post_prompt_reminder": None,
+                 "json_code_post_prompt_reminder": None,
+                 "json_code2_post_prompt_reminder": None,
 
                  'system_prompt': 'auto',
                  'pdf_loaders': np.array(['PyMuPDF'], dtype=object),
@@ -153,6 +159,10 @@ def run_eval1(cpu=False, bits=None, base_model='h2oai/h2ogpt-oig-oasst1-512-6_9b
                  'extract_frames': 10,
                  'visible_models': None,
                  'visible_image_models': None,
+                 'image_size': None,
+                 'image_quality': None,
+                 'image_guidance_scale': None,
+                 'image_num_inference_steps': None,
                  'h2ogpt_key': None,
                  'chat_conversation': None,
                  'text_context_list': None,
@@ -184,6 +194,7 @@ def run_eval1(cpu=False, bits=None, base_model='h2oai/h2ogpt-oig-oasst1-512-6_9b
                  'guided_choice': '',
                  'guided_grammar': '',
                  'guided_whitespace_pattern': None,
+                 'client_metadata': None,
                  }
     if cpu and bits == 32:
         expected1.update({'image_audio_loaders': np.array([], dtype=object)})

@@ -7,6 +7,7 @@ import argparse
 import logging
 import typing
 import uuid
+from multiprocessing import Process
 from threading import Thread
 from typing import Union
 
@@ -34,6 +35,10 @@ def run_server(host: str = '0.0.0.0',
                workers: int = 1,
                app: Union[str, FastAPI] = None,
                is_openai_server: bool = True,
+               is_agent_server: bool = False,
+               openai_port: int = None,
+               agent_server: bool = False,
+               openai_server: bool = False,
                multiple_workers_gunicorn: bool = False,
                main_kwargs: str = "",  # json.dumped dict
                verbose=False,
@@ -42,8 +47,18 @@ def run_server(host: str = '0.0.0.0',
         workers = min(16, os.cpu_count() * 2 + 1)
     assert app is not None
 
-    name = 'OpenAI' if is_openai_server else 'Function'
+    if openai_port is None:
+        openai_port = port
 
+    # is_agent_server is racy, so started this in process instead of thread nominally, or use gunicorn
+    if is_agent_server:
+        name = 'Agent'
+        os.environ['is_agent_server'] = '1'
+    else:
+        name = 'OpenAI' if is_openai_server else 'Function'
+        os.environ['is_agent_server'] = '0'
+
+    # Note: These envs are risky for race given thread is launching for all 3 servers
     os.environ['GRADIO_PREFIX'] = gradio_prefix or 'http'
     os.environ['GRADIO_SERVER_HOST'] = gradio_host or 'localhost'
     os.environ['GRADIO_SERVER_PORT'] = gradio_port or '7860'
@@ -59,11 +74,21 @@ def run_server(host: str = '0.0.0.0',
     os.environ['GRADIO_AUTH_ACCESS'] = auth_access
     os.environ['GRADIO_GUEST_NAME'] = guest_name
 
-    port = int(os.getenv('H2OGPT_OPENAI_PORT', port))
+    os.environ['H2OGPT_OPENAI_PORT'] = str(openai_port)  # so can know the port
+    os.environ['H2OGPT_OPENAI_HOST'] = str(host)  # so can know the host
     ssl_certfile = os.getenv('H2OGPT_OPENAI_CERT_PATH', ssl_certfile)
     ssl_keyfile = os.getenv('H2OGPT_OPENAI_KEY_PATH', ssl_keyfile)
-
     prefix = 'https' if ssl_keyfile and ssl_certfile else 'http'
+    os.environ['H2OGPT_OPENAI_BASE_URL'] = f'{prefix}://{host}:{openai_port}/v1'
+
+    if verbose:
+        print('ENVs')
+        print(dict(os.environ))
+        print('LOCALS')
+        print(locals())
+    else:
+        print("verbose disabled")
+
     try:
         from openai_server.log import logger
     except ModuleNotFoundError:
@@ -73,8 +98,9 @@ def run_server(host: str = '0.0.0.0',
 
     logging.getLogger("uvicorn.error").propagate = False
 
-    # to pass args through so app can run gen setup
-    os.environ['H2OGPT_MAIN_KWARGS'] = main_kwargs
+    if name == 'Function':
+        # to pass args through so app can run gen setup
+        os.environ['H2OGPT_MAIN_KWARGS'] = main_kwargs
 
     if not isinstance(app, str):
         workers = None
@@ -89,6 +115,7 @@ def run_server(host: str = '0.0.0.0',
             'gunicorn',
             '-w', str(workers),
             '-k', 'uvicorn.workers.UvicornWorker',
+            '--timeout', '60',
             '-b', f"{host}:{port}",
         ]
         if ssl_certfile:
@@ -97,9 +124,16 @@ def run_server(host: str = '0.0.0.0',
             command.extend(['--keyfile', ssl_keyfile])
         command.append('openai_server.' + app)  # This should be a string like 'server:app'
 
+        file_path = os.getenv('H2OGPT_OPENAI_LOG_PATH', 'openai_logs')
+        if not os.path.exists(file_path):
+            try:
+                os.makedirs(file_path, exist_ok=True)
+            except FileExistsError:
+                # for races among workers
+                pass
         file_prefix = "gunicorn" + '_' + name + '_' + str(uuid.uuid4()) + '_'
-        file_stdout = file_prefix + 'stdout.log'
-        file_stderr = file_prefix + 'stderr.log'
+        file_stdout = os.path.join(file_path, file_prefix + 'stdout.log')
+        file_stderr = os.path.join(file_path, file_prefix + 'stderr.log')
         f_stdout = open(file_stdout, 'wt')
         f_stderr = open(file_stderr, 'wt')
         process = subprocess.Popen(command, stdout=f_stdout, stderr=f_stderr)
@@ -114,7 +148,23 @@ def run_server(host: str = '0.0.0.0',
 
 def run(wait=True, **kwargs):
     assert 'is_openai_server' in kwargs
-    name = 'OpenAI' if kwargs['is_openai_server'] else 'Function'
+    if kwargs.get('is_agent_server', False):
+        name = 'Agent'
+        # if openai server, then launch this as process instead of thread to avoid races with env vars
+        as_thread = not kwargs.get('openai_server', False)
+    elif kwargs['is_openai_server']:
+        name = 'OpenAI'
+        # if agent server, then launch this as process instead of thread to avoid races with env vars
+        as_thread = not kwargs.get('agent_server', False)
+    else:
+        name = 'Function'
+        # still launch function server as thread since no race for any envs
+        as_thread = True
+
+    # has to stay as thread to avoid forking thread issues for gradio
+    # just deal with race via sleep
+    as_thread = True
+
     if kwargs.get('verbose', False):
         print(kwargs)
 
@@ -150,9 +200,14 @@ def run(wait=True, **kwargs):
     else:
         kwargs['multiple_workers_gunicorn'] = False  # force uvicorn since not using multiple workers
         # launch uvicorn in this process in new thread
-        if kwargs.get('verbose', False):
-            print(f"Single-worker {name} Proxy uvicorn in new thread: {kwargs['workers']}")
-        Thread(target=run_server, kwargs=kwargs, daemon=True).start()
+        if as_thread:
+            if kwargs.get('verbose', False):
+                print(f"Single-worker {name} Proxy uvicorn in new thread: {kwargs['workers']}")
+            Thread(target=run_server, kwargs=kwargs, daemon=True).start()
+        else:
+            if kwargs.get('verbose', False):
+                print(f"Single-worker {name} Proxy uvicorn in new process: {kwargs['workers']}")
+            Process(target=run_server, kwargs=kwargs).start()
 
 
 def argv_to_kwargs(argv=None):

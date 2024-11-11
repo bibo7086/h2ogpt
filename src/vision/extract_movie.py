@@ -1,16 +1,27 @@
 import os
+import sys
 import uuid
 
 from src.utils import makedirs, sanitize_filename, get_gradio_tmp
 
 
 def extract_unique_frames(urls=None, file=None, download_dir=None, export_dir=None, extract_frames=10):
-    download_dir = download_dir or os.getenv('VID_DOWNLOADS', "viddownloads")
-    download_dir = os.path.join(download_dir, str(uuid.uuid4()))
+    temp_workaround = False
+    if temp_workaround:
+        download_dir = './'
+    else:
+        download_dir = download_dir or os.getenv('VID_DOWNLOADS', "viddownloads")
+        download_dir = os.path.join(download_dir, str(uuid.uuid4()))
+        makedirs(download_dir, exist_ok=True)
     # os.environ['FIFTYONE_DISABLE_SERVICES'] = 'True'
     if urls:
-        import fiftyone.utils.youtube as fouy
-        fouy.download_youtube_videos(urls, download_dir=download_dir)
+        if 'openai_server' not in sys.path:
+            sys.path.append('openai_server')
+        from openai_server.agent_tools.download_web_video import download_web_video
+        for url in urls:
+            download_web_video(video_url=url, base_url="https://www.youtube.com", output_dir=download_dir)
+        #import fiftyone.utils.youtube as fouy
+        #fouy.download_youtube_videos(urls, download_dir=download_dir)
 
     # Create a FiftyOne Dataset
     import fiftyone as fo

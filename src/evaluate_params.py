@@ -13,6 +13,7 @@ no_default_param_names = [
     "instruction_nochat",
     "iinput_nochat",
     "h2ogpt_key",
+    "model_lock",
 ]
 
 gen_hyper0 = [
@@ -37,7 +38,7 @@ reader_names = [
 ]
 
 eval_func_param_names = (
-        ["instruction", "iinput", "context", "stream_output", "prompt_type", "prompt_dict"]
+        ["instruction", "iinput", "context", "stream_output", "enable_caching", "prompt_type", "prompt_dict", "chat_template"]
         + gen_hyper
         + [
             "chat",
@@ -63,6 +64,8 @@ eval_func_param_names = (
             "pre_prompt_summary",
             "prompt_summary",
             "hyde_llm_prompt",
+            "all_docs_start_prompt",
+            "all_docs_finish_prompt",
 
             "user_prompt_for_fake_system_prompt",
             "json_object_prompt",
@@ -70,6 +73,10 @@ eval_func_param_names = (
             "json_code_prompt",
             "json_code_prompt_if_no_schema",
             "json_schema_instruction",
+            "json_preserve_system_prompt",
+            "json_object_post_prompt_reminder",
+            "json_code_post_prompt_reminder",
+            "json_code2_post_prompt_reminder",
 
             "system_prompt",
         ]
@@ -77,6 +84,10 @@ eval_func_param_names = (
         + [
             "visible_models",
             "visible_image_models",
+            "image_size",
+            "image_quality",
+            "image_guidance_scale",
+            "image_num_inference_steps",
             "h2ogpt_key",
             "add_search_to_context",
             "chat_conversation",
@@ -114,6 +125,9 @@ eval_func_param_names = (
             "guided_choice",
             "guided_grammar",
             "guided_whitespace_pattern",
+
+            "model_lock",
+            "client_metadata",
         ]
 )
 
@@ -123,9 +137,17 @@ for k in no_default_param_names:
     if k in eval_func_param_names_defaults:
         eval_func_param_names_defaults.remove(k)
 
-eval_extra_columns = ["prompt", "response", "score"]
+eval_extra_columns = ["prompt", "response", "score", "sources"]
 
 # override default_kwargs if user_kwargs None for args evaluate() uses that are not just in model_state
 # ensure prompt_type consistent with prep_bot(), so nochat API works same way
 # see how default_kwargs is set in gradio_runner.py
-key_overrides = ["prompt_type", "prompt_dict"]
+key_overrides = ["prompt_type", "prompt_dict", "chat_template"]
+
+in_model_state_and_evaluate = ['prompt_type', 'prompt_dict', 'chat_template',
+                               'visible_models', 'h2ogpt_key', 'images_num_max',
+                               'image_resolution',
+                               'image_format', 'video_frame_period', 'visible_vision_models']
+
+image_quality_choices = ['standard', 'hd', 'quick', 'manual']
+image_size_default = "1024x1024"

@@ -1,12 +1,12 @@
 import ast
 import asyncio
-import base64
+import selectors
 import contextlib
 import functools
 import gc
-import getpass
 import hashlib
 import inspect
+import io
 import json
 import os
 import pathlib
@@ -21,6 +21,8 @@ import time
 import traceback
 import zipfile
 import tarfile
+from array import array
+from collections import deque
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from typing import Tuple, Callable, Dict
@@ -32,6 +34,7 @@ import filelock
 import fire
 import numpy as np
 import pandas as pd
+import psutil
 import requests
 import uuid
 import re
@@ -42,8 +45,9 @@ from fire import inspectutils
 from joblib import Parallel
 from tqdm.auto import tqdm
 
-from src.enums import split_google, invalid_json_str, docs_joiner_default, git_hash_unset
-from src.utils_procs import reulimit
+from enums import split_google, invalid_json_str, docs_joiner_default, git_hash_unset, is_json_model, \
+    openai_supports_functiontools, openai_supports_parallel_functiontools, does_support_functiontools
+from utils_procs import reulimit
 
 reulimit()
 
@@ -408,14 +412,7 @@ def get_githash():
         print("git failed to run: %s" % str(e))
     if githash == git_hash_unset:
         try:
-            with open('git_hash.txt', 'rt') as f:
-                githash = f.read().strip()
-        except Exception as e:
-            print("git_hash.txt failed to be found: %s" % str(e))
-
-    if githash == git_hash_unset:
-        try:
-            from src.version import __version__
+            from version import __version__
             githash = __version__
         except:
             pass
@@ -586,6 +583,11 @@ def sanitize_filename(name, file_length_limit=250):
 
 
 def shutil_rmtree(*args, **kwargs):
+    path = args[0]
+    assert not os.path.samefile(path,
+                                '/'), "Should not be trying to remove entire root directory: %s" % str(path)
+    assert not os.path.samefile(path,
+                                './'), "Should not be trying to remove entire local directory: %s" % str(path)
     return shutil.rmtree(*args, **kwargs)
 
 
@@ -652,6 +654,60 @@ def atomic_move_simple(src, dst):
     remove(src)
 
 
+def atomic_copy(src="", dst=None, content=None):
+    my_uuid = uuid.uuid4()
+    src_tmp = None
+    if content is not None:
+        src_tmp = os.path.join('./', str(my_uuid))
+        with open(src_tmp, 'wt') as f:
+            f.write(content)
+    elif src != "":
+        src_tmp = src + str(my_uuid)
+        shutil.copy(src, src_tmp)
+    if src_tmp is not None:
+        makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.move(src_tmp, dst)
+        remove(src_tmp)
+
+
+def move_tree(src, dst, include_root=True):
+    makedirs(dst, exist_ok=True)
+    if include_root:
+        shutil.move(src, dst)
+    else:
+        for (path, dirs, files) in os.walk(src):
+            new_path = path.replace(src, dst)
+            makedirs(new_path, exist_ok=True)
+            for file in files:
+                filename = os.path.join(path, file)
+                new_filename = os.path.join(new_path, file)
+                # print("%s -> %s" % (filename, new_filename))
+                try:
+                    # only move if file doesn't already exist
+                    # this ensures use earliest installation if used for pip install race avoidance
+                    if not os.path.isfile(new_filename):
+                        shutil.move(filename, new_filename)
+                except FileExistsError:
+                    pass
+        for (path, dirs, files) in os.walk(src):
+            shutil.rmtree(path, ignore_errors=True)
+
+
+def copy_tree(src, dst, follow_symlink=False):
+    makedirs(dst, exist_ok=True)
+    for (path, dirs, files) in os.walk(src, followlinks=follow_symlink):
+        new_path = path.replace(src, dst)
+        makedirs(new_path, exist_ok=True)
+        for file in files:
+            filename = os.path.join(path, file)
+            new_filename = os.path.join(new_path, file)
+            # print("%s -> %s" % (filename, new_filename))
+            try:
+                atomic_copy(filename, new_filename)
+            except FileNotFoundError:
+                pass
+
+
 def download_simple(url, dest=None, overwrite=False, verbose=False):
     if dest is None:
         dest = os.path.basename(url)
@@ -662,7 +718,8 @@ def download_simple(url, dest=None, overwrite=False, verbose=False):
 
     if os.path.isfile(dest):
         if not overwrite:
-            print("Already have %s from url %s, delete file if invalid" % (dest, str(url)), flush=True)
+            if verbose:
+                print("Already have %s from url %s, delete file if invalid" % (dest, str(url)), flush=True)
             return dest
         else:
             remove(dest)
@@ -836,7 +893,7 @@ def get_url(x, from_str=False, short_name=False, font_size=2):
         return """<font size="%s"><a href="%s" target="_blank"  rel="noopener noreferrer">%s</a></font>""" % (
             font_size, source, source_name)
     elif '<a href=' not in source:
-        return """<font size="%s"><a href="file/%s" target="_blank"  rel="noopener noreferrer">%s</a></font>""" % (
+        return """<font size="%s"><a href="file:///%s" target="_blank"  rel="noopener noreferrer">%s</a></font>""" % (
             font_size, source, source_name)
     else:
         # already filled
@@ -1093,6 +1150,37 @@ class _ForkDataContext(threading.local):
         return func, args, kwargs
 
 
+def using_conda():
+    """
+    Whether using conda and want to use conda
+    :return:
+    """
+    import os, sys
+    return os.path.exists(os.path.join(sys.prefix, 'conda-meta')) and os.environ.get('AVOID_FULL_CONDA') is None
+
+
+def get_python_paths():
+    """
+    Various python paths, same as make/get_python_paths.sh
+    :return:
+    """
+    import os, sys
+    exec_file = sys.executable
+    bpath = os.path.dirname(sys.executable)
+    rootpath = os.path.dirname(os.path.dirname(sys.executable))
+    libpath = os.path.join(rootpath, "lib")
+    includepath = os.path.join(rootpath, "include")
+    from sysconfig import get_paths
+    info = get_paths()
+    spackagespath = info['purelib']
+    pincludepath = info['platinclude']
+    plibpath = info['platstdlib']
+    from distutils.sysconfig import get_config_var
+    plibfile = '%s/%s' % (get_config_var('LIBDIR'), get_config_var('INSTSONAME'))
+    return dict(exec_file=exec_file, bpath=bpath, rootpath=rootpath, libpath=libpath, includepath=includepath,
+                spackagespath=spackagespath, pincludepath=pincludepath, plibpath=plibpath, plibfile=plibfile)
+
+
 forkdatacontext = _ForkDataContext()
 
 
@@ -1181,6 +1269,13 @@ have_serpapi = False
 try:
     assert distribution('google-search-results') is not None
     have_serpapi = True
+except (PackageNotFoundError, AssertionError):
+    pass
+
+have_autogen = False
+try:
+    assert distribution('pyautogen') is not None
+    have_autogen = True
 except (PackageNotFoundError, AssertionError):
     pass
 
@@ -1291,6 +1386,7 @@ class FakeTokenizer:
                  tokenizer=None,
                  is_llama_cpp=False,
                  is_super_fake=False,
+                 is_mistral=False,
                  ):
         if model_max_length is None:
             assert not (
@@ -1302,6 +1398,7 @@ class FakeTokenizer:
         self.is_hf = is_hf
         self.is_llama_cpp = is_llama_cpp
         self.is_super_fake = is_super_fake
+        self.is_mistral = is_mistral
         self.tokenizer = tokenizer
         self.model_max_length = model_max_length
         if not self.is_openai and not self.is_anthropic and not self.is_llama_cpp:
@@ -1311,13 +1408,15 @@ class FakeTokenizer:
         if self.is_super_fake:
             self.encoding = None
         # The first time this runs, it will require an internet connection to download. Later runs won't need an internet connection.
-        elif not (self.is_anthropic or self.is_google):
+        elif not (self.is_anthropic or self.is_google or self.is_mistral):
             import tiktoken
             self.encoding = tiktoken.get_encoding(self.encoding_name)
         else:
             self.encoding = None
 
     def encode(self, x, *args, return_tensors="pt", **kwargs):
+        if not x:
+            return dict(input_ids=[])
         if self.is_super_fake:
             input_ids = self.heuristic_encode(x)
             # avoid torch tensor
@@ -1333,6 +1432,10 @@ class FakeTokenizer:
             input_ids = [0] * self.tokenizer(x).total_tokens  # fake tokens
         elif self.is_hf:
             input_ids = self.tokenizer.encode(x)
+        elif self.is_mistral:
+            from mistral_common.protocol.instruct.request import ChatCompletionRequest
+            input_ids = self.tokenizer.encode_chat_completion(
+                ChatCompletionRequest(messages=[dict(role='user', content=x)])).tokens
         else:
             input_ids = self.encoding.encode(x, disallowed_special=())
         if return_tensors == 'pt' and isinstance(input_ids, list):
@@ -1352,6 +1455,8 @@ class FakeTokenizer:
             return tokenizer.decode(x)
         elif self.is_google:
             return ['a'] * len(x)  # fake
+        elif self.is_mistral:
+            return ['a'] * len(x)  # fake
         elif self.is_hf:
             return self.tokenizer.decode(x)
         # input is input_ids[0] form
@@ -1367,6 +1472,8 @@ class FakeTokenizer:
             return client.count_tokens(prompt)
         elif self.is_google:
             return self.tokenizer(prompt)
+        elif self.is_mistral:
+            return len(self.encode(prompt))
         elif self.is_hf:
             return len(self.tokenizer.encode(prompt))
         num_tokens = len(self.encode(prompt)['input_ids'])
@@ -1427,6 +1534,13 @@ try:
     have_pymupdf = True
 except (PackageNotFoundError, AssertionError):
     have_pymupdf = False
+
+have_pymupdf4llm = False
+try:
+    assert distribution('pymupdf4llm') is not None
+    have_pymupdf4llm = False  # too slow, avoid for now
+except (PackageNotFoundError, AssertionError):
+    pass
 
 try:
     assert distribution('selenium') is not None
@@ -1625,7 +1739,8 @@ def set_openai(inference_server, model_name=None):
                 # for function tools support
                 # https://github.com/Azure/azure-rest-api-specs/tree/main/specification/cognitiveservices/data-plane/AzureOpenAI/inference/preview/2023-12-01-preview
                 # https://learn.microsoft.com/en-us/azure/ai-services/openai/api-version-deprecation
-                api_version = "2024-05-01-preview"
+                # https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/function-calling
+                api_version = "2024-07-01-preview"
             if os.getenv('OPENAI_AZURE_KEY') is not None:
                 # use this instead if exists
                 api_key = os.getenv("OPENAI_AZURE_KEY")
@@ -1665,6 +1780,26 @@ def set_openai(inference_server, model_name=None):
             async_client = AsyncOpenAI(**client_args)
 
         return client, async_client, inf_type, deployment_type, base_url, api_version, api_key
+
+
+def get_model_name(model_name, openai_client):
+    if os.getenv('DISABLE_OPENAI_AUTO_MODEL_NAME', '0') == '1':
+        return model_name
+
+    # override, required for lmdeploy
+    # https://github.com/InternLM/lmdeploy/issues/1674
+    # https://github.com/InternLM/lmdeploy/blob/e6468e7afda6b29d4c065f296a4e893b52bd33d5/lmdeploy/serve/proxy/proxy.py#L320
+    # https://lmdeploy.readthedocs.io/en/latest/serving/api_server.html#restful-api
+    try:
+        model_names = openai_client.models.list().data
+        if len(model_names) == 1:
+            model_name = openai_client.models.list().data[0].id
+        else:
+            print("Too few or too many models in list so do not know which to chose: given: %s list: %s" % (
+                model_name, model_names))
+    except Exception as e:
+        print(f"Failed to get model name from OpenAI client, using default {model_name}: {str(e)}")
+    return model_name
 
 
 def get_list_or_str(x):
@@ -1786,7 +1921,7 @@ def lg_to_gr(
 
     image_audio_loaders_options = ['Caption']
     if n_gpus != 0:
-        image_audio_loaders_options.extend(['CaptionBlip2', 'Pix2Struct'])
+        image_audio_loaders_options.extend(['CaptionLarge', 'Pix2Struct'])
     if have_tesseract:
         image_audio_loaders_options.append('OCR')
     if have_doctr:
@@ -1806,7 +1941,7 @@ def lg_to_gr(
     if kwargs['enable_captions']:
         if kwargs['max_quality'] and n_gpus > 0:
             # BLIP2 only on GPU
-            image_audio_loaders_options0.append('CaptionBlip2')
+            image_audio_loaders_options0.append('CaptionLarge')
         else:
             image_audio_loaders_options0.append('Caption')
     if have_librosa and kwargs['enable_transcriptions']:
@@ -1814,15 +1949,16 @@ def lg_to_gr(
             image_audio_loaders_options0.append('ASRLarge')
         else:
             image_audio_loaders_options0.append('ASR')
-    if kwargs['enable_llava'] and kwargs['llava_model']:
+    if kwargs['enable_llava'] and kwargs['llava_model'] and 'vllm' not in kwargs['llava_model']:
+        # Caption like llava model is only gradio based, legacy method
         #  and n_gpus > 0  # don't require local GPUs
         # LLaVa better and faster if present
         #  and kwargs['max_quality']
         image_audio_loaders_options0.append('LLaVa')
         if 'Caption' in image_audio_loaders_options0:
             image_audio_loaders_options0.remove('Caption')
-        if 'CaptionBlip2' in image_audio_loaders_options0:
-            image_audio_loaders_options0.remove('CaptionBlip2')
+        if 'CaptionLarge' in image_audio_loaders_options0:
+            image_audio_loaders_options0.remove('CaptionLarge')
 
     pdf_loaders_options = ['Unstructured', 'PyPDF', 'TryHTML']
     if have_pymupdf:
@@ -1877,103 +2013,9 @@ def lg_to_gr(
         url_loaders_options0, url_loaders_options
 
 
-def fix_json(s):
-    # Attempt to parse the string as-is.
-    try:
-        return json.loads(s)
-    except json.JSONDecodeError:
-        pass
-
-    # Initialize variables.
-    new_s = ""
-    stack = []
-    is_inside_string = False
-    escaped = False
-
-    # Process each character in the string one at a time.
-    for char in s:
-        if is_inside_string:
-            if char == '"' and not escaped:
-                is_inside_string = False
-            elif char == '\n' and not escaped:
-                char = '\\n'  # Replace the newline character with the escape sequence.
-            elif char == '\\':
-                escaped = not escaped
-            else:
-                escaped = False
-        else:
-            if char == '"':
-                is_inside_string = True
-                escaped = False
-            elif char == '{':
-                stack.append('}')
-            elif char == '[':
-                stack.append(']')
-            elif char == '}' or char == ']':
-                if stack and stack[-1] == char:
-                    stack.pop()
-                else:
-                    # Mismatched closing character; the input is malformed.
-                    return None
-
-        # Append the processed character to the new string.
-        new_s += char
-
-    # If we're still inside a string at the end of processing, we need to close the string.
-    if is_inside_string:
-        new_s += '"'
-
-    # Close any remaining open structures in the reverse order that they were opened.
-    for closing_char in reversed(stack):
-        new_s += closing_char
-
-    # Attempt to parse the modified string as JSON.
-    try:
-        return json.loads(new_s)
-    except json.JSONDecodeError:
-        # If we still can't parse the string as JSON, return None to indicate failure.
-        return None
-
-
-def wrap_in_try_except(code):
-    # Add import traceback
-    code = "import traceback\n" + code
-
-    # Parse the input code into an AST
-    parsed_code = ast.parse(code)
-
-    # Wrap the entire code's AST in a single try-except block
-    try_except = ast.Try(
-        body=parsed_code.body,
-        handlers=[
-            ast.ExceptHandler(
-                type=ast.Name(id="Exception", ctx=ast.Load()),
-                name=None,
-                body=[
-                    ast.Expr(
-                        value=ast.Call(
-                            func=ast.Attribute(value=ast.Name(id="traceback", ctx=ast.Load()), attr="print_exc",
-                                               ctx=ast.Load()),
-                            args=[],
-                            keywords=[]
-                        )
-                    ),
-                ]
-            )
-        ],
-        orelse=[],
-        finalbody=[]
-    )
-
-    # Assign the try-except block as the new body
-    parsed_code.body = [try_except]
-
-    # Convert the modified AST back to source code
-    return ast.unparse(parsed_code)
-
-
 def enqueue_output(file, queue):
-    for line in iter(file.readline, ''):
+    # for line in iter(file.readline, ''):
+    for line in iter(file.readline, b'' if isinstance(file, io.BufferedReader) else ''):
         queue.put(line)
     file.close()
 
@@ -1986,7 +2028,6 @@ def read_popen_pipes(p):
         pool.submit(enqueue_output, p.stderr, q_stderr)
 
         while True:
-
             if p.poll() is not None and q_stdout.empty() and q_stderr.empty():
                 break
 
@@ -2012,6 +2053,136 @@ def start_process(cmd):
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE)
     for c in iter(lambda: process.stdout.read(1), b''):
         sys.stdout.write(c)
+
+
+def execute_cmd_stream(cmd=None, script_content=None, cwd=None, env=None, timeout=None, capture_output=True,
+                       text=True, print_tags=False, print_literal=True, print_func=print,
+                       guard_func=None, sleep=0.05,
+                       max_stream_length=4096, max_memory_usage=16*1024**3):
+    if script_content is None and cmd is None:
+        raise ValueError("Either script_content or cmd must be provided")
+
+    if script_content is not None:
+        script_path = 'temp_script.py'
+        with open(script_path, 'w') as f:
+            f.write(script_content)
+        cmd = [sys.executable, script_path]
+    else:
+        script_path = None
+        assert cmd, "cmd must be provided if script_content is None"
+
+    length = 0
+    try:
+        # Prepare Popen arguments
+        popen_kwargs = {
+            'cwd': cwd,
+            'env': env,
+            'bufsize': 1,  # Line-buffered
+            'stdout': subprocess.PIPE,
+            'stderr': subprocess.PIPE,
+            'universal_newlines': text,
+        }
+
+        with subprocess.Popen(cmd, **popen_kwargs) as p:
+            # Start psutil process to monitor memory usage
+            psutil_process = psutil.Process(p.pid)
+
+            sel = selectors.DefaultSelector()
+            sel.register(p.stdout, selectors.EVENT_READ)
+            sel.register(p.stderr, selectors.EVENT_READ)
+
+            stdout_data = []
+            stderr_data = []
+
+            start_time = time.time()
+
+            while True:
+                if timeout and time.time() - start_time > timeout:
+                    p.terminate()
+                    raise subprocess.TimeoutExpired(cmd, timeout)
+
+                # Monitor memory usage for the main process and all its children
+                if max_memory_usage:
+                    measure_t0 = time.time()
+                    try:
+                        # Get memory usage of the main process and its children
+                        mem_info = psutil_process.memory_info().rss
+                        children = psutil_process.children(recursive=True)
+                        for child in children:
+                            mem_info += child.memory_info().rss
+                    except psutil.NoSuchProcess:
+                        mem_info = 0
+
+                    # Check if the total memory usage exceeds the limit
+                    if mem_info > max_memory_usage:
+                        try:
+                            p.terminate()
+                        except Exception as e:
+                            print(f"Error terminating process: {e}")
+                        try:
+                            p.kill()
+                        except Exception as e:
+                            print(f"Error killing process: {e}")
+                        error = f"Process and its children used memory {mem_info} that exceeded memory limit of {max_memory_usage} bytes detected in {time.time() - measure_t0}."
+                        stderr_data.append(error)
+                        print(f"OOM on cmd:\n\n{cmd}\n\n", flush=True, file=sys.stderr)
+
+                events = sel.select(timeout=1)
+                if not events and p.poll() is not None:
+                    break  # No more events and the process has exited
+
+                for key, _ in events:
+                    data = key.fileobj.readline()
+                    if not data:  # EOF
+                        sel.unregister(key.fileobj)
+                        continue
+
+                    if guard_func:
+                        data = guard_func(data)
+
+                    if key.fileobj is p.stdout:
+                        stdout_data.append(data)
+                        if length + len(data) <= max_stream_length:
+                            if print_tags:
+                                if data.strip():
+                                    print_func(f"STDOUT: {data.strip()}")
+                            elif print_literal:
+                                print_func(data, end='')
+                            else:
+                                print_func(data)
+                        length += len(data)
+                    elif key.fileobj is p.stderr:
+                        stderr_data.append(data)
+                        if length + len(data) <= max_stream_length:
+                            if print_tags:
+                                if data.strip():
+                                    print_func(f"STDERR: {data.strip()}")
+                            elif print_literal:
+                                print_func(data, end='')
+                            else:
+                                print_func(data)
+                        length += len(data)
+
+                if p.poll() is not None and not sel.get_map():
+                    break  # Process has exited and no more data to read
+
+                # sleep shouldn't be too long or else will get chunky streaming and not detect memory usage rapidly enough
+                # sleep shouldn't be too short or else will constantly be doing psutil stuff
+                time.sleep(sleep)
+
+            p.wait(timeout=timeout)
+
+        # Prepare return object similar to subprocess.CompletedProcess
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=p.returncode,
+            stdout=''.join(stdout_data) if capture_output else None,
+            stderr=''.join(stderr_data) if capture_output else None
+        )
+
+    finally:
+        if script_path and os.path.exists(script_path):
+            os.remove(script_path)
 
 
 def str_to_list(x, allow_none=False):
@@ -2318,12 +2489,18 @@ def handle_json(data):
 
 def repair_json_by_type(response, json_schema_type=None):
     # WIP for later
-    if json_schema_type == 'object':
+    if json_schema_type in ['object', None]:
         from json_repair import repair_json
+        response_str = response
         response = repair_json(response)
+        if response in ['""', """''""", '', None]:
+            return {}
         try:
             # assumes already dict
-            return json.dumps(handle_json(json.loads(response)))
+            response = handle_json(json.loads(response))
+            if isinstance(response, list) and len(response) >= 1 and not response_str.startswith('['):
+                response = response[-1]  # take last if list, if was not pure list response
+            return json.dumps(response)
         except Exception as e:
             print("Did not extract_values: %s" % str(e))
             return response
@@ -2453,7 +2630,7 @@ def get_vllm_version(openai_client, inference_server, verbose=False):
             else:
                 if verbose:
                     print(f"Failed to retrieve version, status code: {response.status_code}")
-        except (requests.exceptions.Timeout, requests.exceptions.JSONDecodeError):
+        except (requests.exceptions.Timeout, requests.exceptions.JSONDecodeError, requests.exceptions.ConnectionError):
             # if times out, assume older version, with no JSON.  Or might not be real vllm
             vllm_version = '0.3.0'
             print(f"vLLM Server version timeout, assuming: {vllm_version}")
@@ -2481,7 +2658,7 @@ def get_docs_tokens(tokenizer, text_context_list=[], max_input_tokens=None, docs
         top_k_docs = 1
         text_context_list = text_context_list[:top_k_docs]
         # critical protection
-        from src.h2oai_pipeline import H2OTextGenerationPipeline
+        from h2oai_pipeline import H2OTextGenerationPipeline
         doc_content = text_context_list[0]
         doc_content, new_tokens0 = H2OTextGenerationPipeline.limit_prompt(doc_content,
                                                                           tokenizer,
@@ -2815,3 +2992,146 @@ def get_youtube_urls():
 
 
 url_prefixes_youtube = get_youtube_urls()
+
+
+def get_llama_lower_hf(llama_lower):
+    if 'huggingface.co' in llama_lower and '/resolve/' in llama_lower and len(llama_lower.split('huggingface.co')) == 2:
+        llama_lower_hf = llama_lower.split('huggingface.co')[1].split('resolve/')[0]
+    else:
+        llama_lower_hf = None
+    return llama_lower_hf
+
+
+def get_depth_normal(lst):
+    if isinstance(lst, list) and lst:
+        return 1 + max(get_depth_normal(item) for item in lst)
+    else:
+        return 0
+
+
+def get_gradio_depth(lst):
+    def get_depth(lst):
+        if isinstance(lst, (tuple, list)) and lst:
+            depths = [get_depth(item) for item in lst]
+            return 1 + max(depths)
+        else:
+            return 0
+
+    def has_single_element_sublist(lst, depth):
+        if depth == 1:
+            return isinstance(lst, (tuple, list)) and len(lst) == 1
+        if isinstance(lst, (tuple, list)):
+            return any(has_single_element_sublist(item, depth - 1) for item in lst)
+        return False
+
+    depth = get_depth(lst)
+    if has_single_element_sublist(lst, depth):
+        depth -= 1
+    return depth
+
+
+def is_empty(obj):
+    if obj is None:
+        return True
+    if isinstance(obj, (str, list, tuple, dict, set)):
+        return len(obj) == 0
+    if isinstance(obj, bool):
+        return False
+    if isinstance(obj, (int, float)):
+        # Numbers can't be "empty" in the traditional sense, so go by value for them
+        return False if 0 else True
+    if isinstance(obj, complex):
+        return obj == 0
+    if isinstance(obj, bytes):
+        return len(obj) == 0
+    if isinstance(obj, bytearray):
+        return len(obj) == 0
+    if isinstance(obj, memoryview):
+        return len(obj) == 0
+    if isinstance(obj, range):
+        return len(obj) == 0
+    if isinstance(obj, frozenset):
+        return len(obj) == 0
+    if isinstance(obj, deque):
+        return len(obj) == 0
+    if isinstance(obj, array):
+        return len(obj) == 0
+    if isinstance(obj, (map, filter, zip)):
+        # These are iterators and need to be converted to a list to check if they are empty
+        return len(list(obj)) == 0
+    if hasattr(obj, '__len__'):
+        return len(obj) == 0
+    return False
+
+
+from typing import Any, Dict, List, Union
+from typing_extensions import TypedDict
+
+
+def create_typed_dict(schema: Dict[str, Any], name: str = "Schema") -> type:
+    properties = schema.get("properties", {})
+    required = set(schema.get("required", []))
+
+    fields: Dict[str, Union[type, Any]] = {}
+    total = len(required) == len(properties)
+
+    for prop, details in properties.items():
+        prop_type = details.get("type")
+        if prop_type == "string":
+            field_type = str
+        elif prop_type == "integer":
+            field_type = int
+        elif prop_type == "number":
+            field_type = float
+        elif prop_type == "boolean":
+            field_type = bool
+        elif prop_type == "array":
+            items = details.get("items", {})
+            if items.get("type") == "string":
+                field_type = List[str]
+            elif items.get("type") == "object":
+                field_type = List[create_typed_dict(items, f"{name}Item")]
+            else:
+                field_type = List[Any]
+        elif prop_type == "object":
+            field_type = create_typed_dict(details, f"{name}{prop.capitalize()}")
+        else:
+            field_type = Any
+
+        if prop in required:
+            fields[prop] = field_type
+        else:
+            fields[prop] = Union[field_type, None]
+
+    return TypedDict(name, fields, total=total)
+
+
+def get_supports_schema(inference_server, base_model, response_format='json_object', guided_json={}, json_vllm=False,
+                        just_test=False):
+    if just_test:
+        supports_schema = True
+    else:
+        supports_schema = not is_empty(guided_json) and \
+                          response_format == 'json_object'
+
+    supports_schema &= is_json_model(base_model, inference_server, json_vllm=json_vllm)
+
+    supports_schema &= json_vllm or \
+                       not is_empty(inference_server) and \
+                       any(inference_server.startswith(x) for x in ['openai_chat', 'openai_azure_chat']) and \
+                       not is_empty(
+                           base_model) and base_model in openai_supports_functiontools + openai_supports_parallel_functiontools or \
+                       not is_empty(inference_server) and \
+                       inference_server.startswith('anthropic') or \
+                       not is_empty(inference_server) and \
+                       inference_server.startswith('google') and base_model == 'gemini-1.5-pro-latest' or \
+                       not is_empty(inference_server) and \
+                       inference_server.startswith('mistralai') and \
+                       does_support_functiontools(inference_server, base_model)
+
+    return supports_schema
+
+
+def dedup_list(x):
+    x = [x.text if hasattr(x, 'text') else x for x in x]
+    return list(dict.fromkeys(x))

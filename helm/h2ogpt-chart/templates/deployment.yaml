@@ -1,6 +1,12 @@
 {{- if and .Values.vllm.enabled .Values.tgi.enabled }}
   {{- fail "Both TGI and vLLM cannot be enabled at the same time. Enable only one and try again" }}
 {{- end }}
+{{- if and .Values.vllm.enabled .Values.lmdeploy.enabled }}
+  {{- fail "Both lmdeploy and vLLM cannot be enabled at the same time. Enable only one and try again" }}
+{{- end }}
+{{- if and .Values.lmdeploy.enabled .Values.tgi.enabled }}
+  {{- fail "Both TGI and lmdeploy cannot be enabled at the same time. Enable only one and try again" }}
+{{- end }}
 {{- if .Values.h2ogpt.stack.enabled }}
   {{- if not (and .Values.vllm.enabled .Values.h2ogpt.enabled) }}
     {{- fail "If h2oGPT stack is enabled, both vLLM and h2oGPT should be enabled" }}
@@ -87,7 +93,7 @@ spec:
             {{- toYaml .Values.vllm.securityContext | nindent 12 }}
           image: "{{ .Values.vllm.image.repository }}:{{ .Values.vllm.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.vllm.image.pullPolicy }}
-          command: ["/h2ogpt_conda/vllm_env/bin/python3.10"]
+          command: ["python3"]
           args: 
             - "-m" 
             - "vllm.entrypoints.openai.api_server"
@@ -180,7 +186,18 @@ spec:
               
             python3 /workspace/generate.py
           {{- end }}
-          {{- if and .Values.h2ogpt.enabled (not (or .Values.vllm.enabled .Values.tgi.enabled)) }}
+          {{- if and .Values.lmdeploy.enabled (not .Values.h2ogpt.externalLLM.modelLock) }}
+          args:
+          - >
+            until wget -O- http://{{ include "h2ogpt.fullname" . }}-lmdeploy-inference:{{ .Values.lmdeploy.service.port }}/ >/dev/null 2>&1;
+              do
+                echo "Waiting for inference service to become ready...";
+                sleep 5;
+              done
+              
+            python3 /workspace/generate.py
+          {{- end }}
+          {{- if and .Values.h2ogpt.enabled (not (or .Values.vllm.enabled .Values.tgi.enabled .Values.lmdeploy.enabled)) }}
           args:
           - >
             python3 /workspace/generate.py
@@ -192,6 +209,15 @@ spec:
               protocol: TCP
             - name: gpt
               containerPort: 8888
+              protocol: TCP
+            - name: openai
+              containerPort: 5000
+              protocol: TCP
+            - name: function
+              containerPort: 5002
+              protocol: TCP
+            - name: agent
+              containerPort: 5004
               protocol: TCP
           {{- if .Values.h2ogpt.livenessProbe }}
           livenessProbe:
@@ -222,6 +248,10 @@ spec:
           {{- if and .Values.vllm.enabled (not .Values.h2ogpt.externalLLM.enabled) (not .Values.h2ogpt.stack.enabled ) }}
           - name: h2ogpt_inference_server
             value: "vllm:{{ include "h2ogpt.fullname" . }}-vllm-inference:{{ .Values.vllm.service.port }}"
+          {{- end }}
+          {{- if and .Values.lmdeploy.enabled (not .Values.h2ogpt.externalLLM.enabled) (not .Values.h2ogpt.stack.enabled ) }}
+          - name: h2ogpt_inference_server
+            value: "http://{{ include "h2ogpt.fullname" . }}-lmdeploy-inference:{{ .Values.lmdeploy.service.port }}"
           {{- end }}
           {{- if and .Values.h2ogpt.stack.enabled (not .Values.h2ogpt.externalLLM.enabled)  }}
           - name: h2ogpt_inference_server
@@ -263,6 +293,12 @@ spec:
           - name: H2OGPT_SCORE_MODEL
             value: None
           {{- end }}
+          {{- if .Values.h2ogpt.visionModels.enabled }}
+          - name: H2OGPT_VISIBLE_VISION_MODELS
+            value: {{ .Values.h2ogpt.visionModels.visibleModels | quote }}
+          - name: H2OGPT_ROTATE_ALIGN_RESIZE_IMAGE
+            value: {{ .Values.h2ogpt.visionModels.rotateAlignResizeImage | quote }}
+          {{- end }}
           volumeMounts:
             - name: {{ include "h2ogpt.fullname" . }}-volume
               mountPath: /workspace/.cache
@@ -270,6 +306,14 @@ spec:
             - name: {{ include "h2ogpt.fullname" . }}-volume
               mountPath: /workspace/save
               subPath: save
+            {{- if .Values.caCertificates }}
+            - name: ca-certificates
+              mountPath: /etc/ssl/certs/root-ca-bundle.crt
+              subPath: root-ca-bundle.crt
+            {{- end }}
+            {{ with .Values.h2ogpt.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: {{ include "h2ogpt.fullname" . }}-volume
           {{- if not .Values.h2ogpt.storage.useEphemeral }}
@@ -302,6 +346,14 @@ spec:
                     storage: {{ .Values.vllm.storage.size | quote }}
                 storageClassName: {{ .Values.vllm.storage.class }}
           {{- end }}
+        {{- end }}
+        {{- if .Values.caCertificates }}
+        - name: ca-certificates
+          configMap:
+            name: {{ include "h2ogpt.fullname" . }}-ca-certificates
+        {{- end }}
+        {{- with .Values.h2ogpt.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
 {{- end }}
 ---
@@ -578,7 +630,7 @@ spec:
             {{- toYaml .Values.vllm.securityContext | nindent 12 }}
           image: "{{ .Values.vllm.image.repository }}:{{ .Values.vllm.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.vllm.image.pullPolicy }}
-          command: ["/h2ogpt_conda/vllm_env/bin/python3.10"]
+          command: ["python3"]
           args: 
             - "-m" 
             - "vllm.entrypoints.openai.api_server"
@@ -665,4 +717,168 @@ spec:
   resources:
     requests:
       storage: {{ .Values.vllm.storage.size | quote }}
+{{- end }}
+---
+{{- if and (.Values.lmdeploy.enabled) (not .Values.h2ogpt.stack.enabled )}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "h2ogpt.fullname" . }}-lmdeploy-inference
+  namespace: {{ include "h2ogpt.namespace" . | quote }}
+  labels:
+    app: {{ include "h2ogpt.fullname" . }}-lmdeploy-inference
+spec:
+  {{- if not .Values.lmdeploy.autoscaling.enabled }}
+  replicas: {{ .Values.lmdeploy.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ include "h2ogpt.fullname" . }}-lmdeploy-inference
+  {{- if .Values.lmdeploy.updateStrategy }}
+  strategy: {{- toYaml .Values.lmdeploy.updateStrategy | nindent 4 }}
+  {{- end }}
+  template:
+    metadata:
+      {{- with .Values.lmdeploy.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        app: {{ include "h2ogpt.fullname" . }}-lmdeploy-inference
+        {{- with .Values.lmdeploy.podLabels }}
+        {{ toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.lmdeploy.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.lmdeploy.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.lmdeploy.podSecurityContext | nindent 8 }}
+      affinity:
+        {{- if .Values.lmdeploy.podAffinity }}
+        podAntiAffinity:
+          {{- if .Values.lmdeploy.podAffinity.hostname }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - {{ include "h2ogpt.fullname" . }}
+              topologyKey: kubernetes.io/hostname
+          {{- end }}
+          {{- if .Values.lmdeploy.podAffinity.zone }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - {{ include "h2ogpt.fullname" . }}
+                topologyKey: failure-domain.beta.kubernetes.io/zone
+          {{- end }}
+        {{- end }}
+      {{- with .Values.lmdeploy.extraAffinity }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.lmdeploy.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ include "h2ogpt.fullname" . }}-lmdeploy-inference
+          securityContext:
+            {{- toYaml .Values.lmdeploy.securityContext | nindent 12 }}
+          image: "{{ .Values.lmdeploy.image.repository }}:{{ .Values.lmdeploy.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.lmdeploy.image.pullPolicy }}
+          command: ["lmdeploy"]
+          args:
+            - "serve"
+            - "api_server"
+{{- range $arg := .Values.lmdeploy.containerArgs }}
+            - "{{ $arg }}"
+{{- end }}
+          ports:
+            - name: http
+              containerPort: 23333
+              protocol: TCP
+          {{- if .Values.lmdeploy.livenessProbe }}
+          livenessProbe:
+            httpGet:
+              path:  /
+              scheme: HTTP
+              port: http
+            {{- toYaml .Values.lmdeploy.livenessProbe | nindent 12 }}
+          {{- end }}
+          {{- if .Values.lmdeploy.readinessProbe }}
+          readinessProbe:
+            httpGet:
+              path:  /
+              scheme: HTTP
+              port: http
+            {{- toYaml .Values.lmdeploy.readinessProbe | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.lmdeploy.resources | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "h2ogpt.fullname" . }}-lmdeploy-inference-config
+          env:
+          - name: NCCL_IGNORE_DISABLED_P2P
+            value: "1"
+          - name: HF_HOME
+            value: "/workspace/.cache"
+          {{- range $key, $value := .Values.lmdeploy.env }}
+          - name: "{{ $key }}"
+            value: "{{ $value }}"
+          {{- end }}
+          volumeMounts:
+            - name: {{ include "h2ogpt.fullname" . }}-lmdeploy-inference-volume
+              mountPath: /workspace/.cache
+              subPath: cache
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: {{ include "h2ogpt.fullname" . }}-lmdeploy-inference-volume
+          {{- if not .Values.lmdeploy.storage.useEphemeral }}
+          persistentVolumeClaim:
+            claimName: {{ include "h2ogpt.fullname" . }}-lmdeploy-inference-volume
+          {{- else }}
+          ephemeral:
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: {{ .Values.lmdeploy.storage.size | quote }}
+                storageClassName: {{ .Values.lmdeploy.storage.class }}
+          {{- end }}
+        - emptyDir:
+            medium: Memory
+            sizeLimit: 10.24Gi
+          name: shm
+{{- end }}
+---
+{{- if and (.Values.lmdeploy.enabled) (not .Values.lmdeploy.storage.useEphemeral) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "h2ogpt.fullname" . }}-lmdeploy-inference-volume
+  namespace: {{ include "h2ogpt.namespace" . | quote }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # storageClassName: {{ .Values.lmdeploy.storage.class | quote }}
+  storageClassName: {{ .Values.lmdeploy.storage.class }}
+  resources:
+    requests:
+      storage: {{ .Values.lmdeploy.storage.size | quote }}
 {{- end }}

@@ -1,6 +1,7 @@
 import base64
 import functools
 import os
+import tempfile
 import time
 import types
 import uuid
@@ -11,26 +12,10 @@ from PIL.Image import Resampling
 
 from gradio_utils.grclient import check_job
 from src.enums import valid_imagegen_models, valid_imagechange_models, valid_imagestyle_models, docs_joiner_default, \
-    llava16_model_max_length, llava16_image_tokens, llava16_image_fudge
+    llava16_model_max_length, llava16_image_tokens, llava16_image_fudge, VIDEO_EXTENSIONS, IMAGE_EXTENSIONS
 from src.image_utils import fix_image_file
 from src.utils import is_gradio_version4, get_docs_tokens, get_limited_text, makedirs, call_subprocess_onetask, \
-    have_fiftyone
-
-IMAGE_EXTENSIONS = {'.png': 'PNG', '.apng': 'PNG', '.blp': 'BLP', '.bmp': 'BMP', '.dib': 'DIB', '.bufr': 'BUFR',
-                    '.cur': 'CUR', '.pcx': 'PCX', '.dcx': 'DCX', '.dds': 'DDS', '.ps': 'EPS', '.eps': 'EPS',
-                    '.fit': 'FITS', '.fits': 'FITS', '.fli': 'FLI', '.flc': 'FLI', '.fpx': 'FPX', '.ftc': 'FTEX',
-                    '.ftu': 'FTEX', '.gbr': 'GBR', '.gif': 'GIF', '.grib': 'GRIB', '.h5': 'HDF5', '.hdf': 'HDF5',
-                    '.jp2': 'JPEG2000', '.j2k': 'JPEG2000', '.jpc': 'JPEG2000', '.jpf': 'JPEG2000', '.jpx': 'JPEG2000',
-                    '.j2c': 'JPEG2000', '.icns': 'ICNS', '.ico': 'ICO', '.im': 'IM', '.iim': 'IPTC', '.jfif': 'JPEG',
-                    '.jpe': 'JPEG', '.jpg': 'JPEG', '.jpeg': 'JPEG', '.tif': 'TIFF', '.tiff': 'TIFF', '.mic': 'MIC',
-                    '.mpg': 'MPEG', '.mpeg': 'MPEG', '.mpo': 'MPO', '.msp': 'MSP', '.palm': 'PALM', '.pcd': 'PCD',
-                    '.pdf': 'PDF', '.pxr': 'PIXAR', '.pbm': 'PPM', '.pgm': 'PPM', '.ppm': 'PPM', '.pnm': 'PPM',
-                    '.psd': 'PSD', '.qoi': 'QOI', '.bw': 'SGI', '.rgb': 'SGI', '.rgba': 'SGI', '.sgi': 'SGI',
-                    '.ras': 'SUN', '.tga': 'TGA', '.icb': 'TGA', '.vda': 'TGA', '.vst': 'TGA', '.webp': 'WEBP',
-                    '.wmf': 'WMF', '.emf': 'WMF', '.xbm': 'XBM', '.xpm': 'XPM'}
-
-VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm'}
-
+    have_fiftyone, sanitize_filename
 
 def is_animated_gif(file_path):
     if not file_path.endswith('.gif'):
@@ -162,6 +147,7 @@ def video_to_base64frames(video_path):
     return base64Frames
 
 
+@functools.lru_cache(maxsize=10000, typed=False)
 def video_to_frames(video_path, output_dir, resolution=None, image_format="jpg", video_frame_period=None,
                     extract_frames=None,
                     verbose=False):
@@ -183,7 +169,10 @@ def video_to_frames(video_path, output_dir, resolution=None, image_format="jpg",
     file_names = video_to_frames("input_video.mp4", "output_frames", resolution=(640, 480), image_format="png", verbose=True)
     print(file_names)
     """
-    enable_fiftyone = False  # WIP cuda mp issue
+    if output_dir is None:
+        output_dir = os.path.join(tempfile.gettempdir(), 'image_path_%s' % sanitize_filename(video_path))
+
+    enable_fiftyone = True  # optimal against issues if using function server
     if enable_fiftyone and \
             have_fiftyone and \
             (video_frame_period is not None and video_frame_period < 1 or not os.path.isfile(video_path)):
@@ -195,19 +184,20 @@ def video_to_frames(video_path, output_dir, resolution=None, image_format="jpg",
         kwargs = {'urls': urls, 'file': file, 'download_dir': None, 'export_dir': output_dir,
                   'extract_frames': extract_frames}
         # fifty one is complex program and leaves around processes
-        if False: # FIXME: but can't fork cuda
+        if False:  # NOTE: Assumes using function server to handle isolation if want production grade behavior
             func_new = partial(call_subprocess_onetask, extract_unique_frames, args, kwargs)
         else:
             func_new = functools.partial(extract_unique_frames, *args, **kwargs)
         export_dir = func_new()
         return [os.path.join(export_dir, x) for x in os.listdir(export_dir)]
 
+    if video_frame_period and video_frame_period < 1:
+        video_frame_period = None
     if video_frame_period in [None, 0]:
         # e.g. if no fiftyone and so can't do 0 case, then assume ok to do period based
         total_frames = count_frames(video_path)
-        video_frame_period = total_frames // 20  # no more than 20 frames total for now
-    if video_frame_period < 1:
-        video_frame_period = 1
+        extract_frames = min(20, extract_frames or 20)  # no more than 20 frames total for now
+        video_frame_period = total_frames // extract_frames
 
     video = cv2.VideoCapture(video_path)
     makedirs(output_dir)
@@ -301,7 +291,8 @@ def process_file_list(file_list, output_dir, resolution=None, image_format="jpg"
             # If it's a valid video, extract frames
             if verbose:
                 print(f"Processing video file: {file}")
-            frame_files = video_to_frames(file, output_dir, resolution, image_format, video_frame_period,
+            # output_dir is None means only use file for location
+            frame_files = video_to_frames(file, None, resolution, image_format, video_frame_period,
                                           extract_frames, verbose)
             image_files.extend(frame_files)
         else:
@@ -686,13 +677,26 @@ def get_image_model_dict(enable_image,
         if image_model_name in image_models:
             imagegen_index = image_models.index(image_model_name)
             if image_model_name == 'sdxl_turbo':
-                from src.vision.sdxl import get_pipe_make_image, make_image
+                from src.vision.sdxl_turbo import get_pipe_make_image, make_image
             elif image_model_name == 'playv2':
                 from src.vision.playv2 import get_pipe_make_image, make_image
             elif image_model_name == 'sdxl':
                 from src.vision.stable_diffusion_xl import get_pipe_make_image, make_image
+            elif image_model_name == 'sd3':
+                from src.vision.stable_diffusion_xl import get_pipe_make_image, make_image
+                get_pipe_make_image = functools.partial(get_pipe_make_image,
+                                                        base_model='stabilityai/stable-diffusion-3-medium-diffusers',
+                                                        refiner_model=None)
+                make_image = functools.partial(make_image,
+                                               base_model='stabilityai/stable-diffusion-3-medium-diffusers',
+                                               refiner_model=None)
+            elif image_model_name == 'flux.1-dev':
+                from src.vision.flux import get_pipe_make_image, make_image
+            elif image_model_name == 'flux.1-schnell':
+                from src.vision.flux import get_pipe_make_image_2 as get_pipe_make_image
+                from src.vision.flux import make_image
             elif image_model_name == 'sdxl_change':
-                from src.vision.sdxl import get_pipe_change_image as get_pipe_make_image, change_image
+                from src.vision.sdxl_turbo import get_pipe_change_image as get_pipe_make_image, change_image
                 make_image = change_image
             # FIXME: style
             else:

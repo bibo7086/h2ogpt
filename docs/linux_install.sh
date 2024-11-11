@@ -72,8 +72,6 @@ for i in 1 2 3 4; do python -m nltk.downloader all && break || sleep 1; done  # 
 # Optional: Required for PlayWright
 if [[ -z "${WOLFI_OS}" ]]; then
   playwright install --with-deps
-  # Audio speed-up and slowdown (best quality), if not installed can only speed-up with lower quality
-  sudo apt-get install -y rubberband-cli
 else
   echo "playwright is part of the base wolfi-os image"
 fi
@@ -146,10 +144,8 @@ if [[ -z "${WOLFI_OS}" ]]; then
   chromeVersion="$(echo $(google-chrome --version) | cut -d' ' -f3)"
   # visit https://googlechromelabs.github.io/chrome-for-testing/ and download matching version
   # E.g.
-  sudo rm -rf chromedriver_linux64.zip chromedriver LICENSE.chromedriver
-
   # Attempt to download matching version of ChromeDriver
-  sudo rm -rf chromedriver_linux64.zip chromedriver LICENSE.chromedriver
+  sudo rm -rf chromedriver-linux64.zip chromedriver LICENSE.chromedriver
   if ! wget -O chromedriver-linux64.zip "https://storage.googleapis.com/chrome-for-testing-public/${chromeVersion}/linux64/chromedriver-linux64.zip"; then
       echo "Failed to download ChromeDriver for version ${chromeVersion}, attempting to download known working version 124.0.6367.91."
       if ! wget -O chromedriver-linux64.zip "https://storage.googleapis.com/chrome-for-testing-public/124.0.6367.91/linux64/chromedriver-linux64.zip"; then
@@ -170,7 +166,7 @@ fi
 #* GPU Optional: For AutoGPTQ support on x86_64 linux
 #
 # in-transformers support of AutoGPTQ, requires also auto-gptq above to be installed since used internally by transformers/optimum
-pip install optimum==1.17.1 -c reqs_optional/reqs_constraints.txt
+#pip install optimum==1.22.0 -c reqs_optional/reqs_constraints.txt
 #    See [AutoGPTQ](README_GPU.md#autogptq) about running AutoGPT models.
 
 
@@ -203,7 +199,7 @@ if [[ "${PIP_EXTRA_INDEX_URL}" == *"cu118"* ]]; then
   pip install auto-gptq==0.7.1 --extra-index-url https://huggingface.github.io/autogptq-index/whl/cu118/
   echo "cuda118 for awq, see: https://github.com/casper-hansen/AutoAWQ_kernels/releases/"
 
-else
+elif [[ -v CUDA_HOME ]]; then
   #* GPU Optional: For exllama support on x86_64 linux
   #pip uninstall -y exllama ; pip install https://github.com/jllllll/exllama/releases/download/0.0.18/exllama-0.0.18+cu121-cp310-cp310-linux_x86_64.whl --no-cache-dir -c reqs_optional/reqs_constraints.txt
   #    See [exllama](README_GPU.md#exllama) about running exllama models.
@@ -220,7 +216,7 @@ fi
 if [[ -v CUDA_HOME ]];
 then
     pip install --upgrade pip
-    pip install flash-attn==2.4.2 --no-build-isolation --no-cache-dir -c reqs_optional/reqs_constraints.txt
+    pip install flash-attn==2.6.3 --no-build-isolation --no-cache-dir -c reqs_optional/reqs_constraints.txt
 fi
 
 
@@ -237,15 +233,35 @@ pip install https://h2o-release.s3.amazonaws.com/h2ogpt/duckdb-0.8.2.dev4025%2Bg
 #
 pip install -r reqs_optional/requirements_optional_agents.txt -c reqs_optional/reqs_constraints.txt
 #  For more info see [SERP Docs](README_SerpAPI.md).
-
+pip install aider-chat
+# now fix
+pip install transformers -U -c reqs_optional/reqs_constraints.txt
 
 # https://github.com/h2oai/h2ogpt/issues/1483
 pip uninstall flash_attn autoawq autoawq-kernels -y
 pip install flash_attn autoawq autoawq-kernels --no-cache-dir -c reqs_optional/reqs_constraints.txt
 
+# work-around issue with tenacity 8.4.0
+pip install tenacity==8.3.0 -c reqs_optional/reqs_constraints.txt
+
+# work-around for some package downgrading jinja2 but >3.1.0 needed for transformers
+pip install jinja2==3.1.4 -c reqs_optional/reqs_constraints.txt
 
 bash ./docs/run_patches.sh
 
+
+# NPM based
+npm install -g @mermaid-js/mermaid-cli
+npm install -g puppeteer-core
+# npx -y puppeteer browsers install chrome-headless-shell
+
+# fifty one doesn't install db right for wolfi, so improve
+# https://github.com/voxel51/fiftyone/issues/3975
+wget https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-ubuntu2204-7.0.4.tgz
+tar xvzf mongodb-linux-x86_64-ubuntu2204-7.0.4.tgz
+mkdir -p /usr/lib/python3.10/site-packages/fiftyone/db/
+cp -r mongodb-linux-x86_64-ubuntu2204-7.0.4/bin /usr/lib/python3.10/site-packages/fiftyone/db/
+chmod -R a+rwx /usr/lib/python3.10/site-packages/fiftyone/db
 
 if [[ -z "${WOLFI_OS}" ]]; then
   #

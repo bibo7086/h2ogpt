@@ -18,8 +18,6 @@ COPY . /workspace/
 
 COPY build_info.txt /workspace/
 
-COPY git_hash.txt /workspace/
-
 RUN cd /workspace && ./docker_build_script_ubuntu.sh
 
 RUN chmod -R a+rwx /workspace
@@ -30,11 +28,19 @@ ARG uid=1000
 ARG gid=1000
 
 RUN groupadd -g ${gid} ${group} && useradd -u ${uid} -g ${group} -s /bin/bash ${user}
+# already exists in base image
+# RUN groupadd -g ${gid} docker && useradd -u ${uid} -g ${group} -m ${user}
+
+# Add the user to the docker group
+RUN usermod -aG docker ${user}
+
+# Switch to the new user
+USER ${user}
 
 EXPOSE 8888
 EXPOSE 7860
 EXPOSE 5000
-
-USER h2ogpt
+EXPOSE 5002
+EXPOSE 5004
 
 ENTRYPOINT ["python3.10"]

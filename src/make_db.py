@@ -156,7 +156,7 @@ def make_db_main(use_openai_embedding: bool = False,
                  enable_pix2struct=False,
                  enable_captions=True,
                  enable_llava=True,
-                 captions_model: str = "Salesforce/blip-image-captioning-base",
+                 captions_model: str = "microsoft/Florence-2-base",
                  llava_model: str = None,
                  llava_prompt: str = None,
                  pre_load_image_audio_models: bool = False,
@@ -195,7 +195,7 @@ def make_db_main(use_openai_embedding: bool = False,
     python src/make_db.py --download_one=db_dir_DriverlessAI_docs.zip
 
     :param use_openai_embedding: Whether to use OpenAI embedding
-    :param hf_embedding_model: HF embedding model to use. Like generate.py, uses 'hkunlp/instructor-large' if have GPUs, else "sentence-transformers/all-MiniLM-L6-v2"
+    :param hf_embedding_model: HF embedding model to use. Like generate.py, uses 'BAAI/bge-large-en-v1.5' if have GPUs, else "sentence-transformers/all-MiniLM-L6-v2"
     :param migrate_embedding_model: whether to migrate to newly chosen hf_embedding_model or stick with one in db
     :param persist_directory: where to persist db (note generate.py always uses db_dir_<collection name>
            If making personal database for user, set persistent_directory to users/<username>/db_dir_<collection name>
@@ -269,7 +269,7 @@ def make_db_main(use_openai_embedding: bool = False,
     else:
         if hf_embedding_model is None:
             # if still None, then set default
-            hf_embedding_model = 'hkunlp/instructor-large'
+            hf_embedding_model = 'BAAI/bge-large-en-v1.5'
 
     existing_db = False
 
@@ -312,8 +312,8 @@ def make_db_main(use_openai_embedding: bool = False,
         # However, if have many images, all those images will be handled more quickly by preloaded model on GPU
         from image_captions import H2OImageCaptionLoader
         caption_loader = H2OImageCaptionLoader(None,
-                                               blip_model=captions_model,
-                                               blip_processor=captions_model,
+                                               caption_model=captions_model,
+                                               caption_processor=captions_model,
                                                caption_gpu=caption_gpu,
                                                ).load_model()
     else:

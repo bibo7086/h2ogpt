@@ -9,7 +9,7 @@ from utils import clear_torch_cache, NullContext, get_kwargs
 
 def run_cli(  # for local function:
         base_model=None, lora_weights=None, inference_server=None, regenerate_clients=None,
-        regenerate_gradio_clients=None,
+        regenerate_gradio_clients=None, validate_clients=None, fail_if_invalid_client=None,
         debug=None,
         examples=None, memory_restriction_level=None,
         # evaluate kwargs
@@ -19,6 +19,8 @@ def run_cli(  # for local function:
         force_seq2seq_type=None, force_t5_type=None,
         load_exllama=None,
 
+        force_streaming_on_to_handle_timeouts=None,
+
         use_pymupdf=None,
         use_unstructured_pdf=None,
         use_pypdf=None,
@@ -26,12 +28,16 @@ def run_cli(  # for local function:
         enable_pdf_doctr=None,
         enable_image=None,
         visible_image_models=None,
+        image_size=None,
+        image_quality=None,
+        image_guidance_scale=None,
+        image_num_inference_steps=None,
 
         try_pdf_as_html=None,
         # for some evaluate args
         load_awq='',
-        stream_output=None, async_output=None, num_async=None, stream_map=None,
-        prompt_type=None, prompt_dict=None, system_prompt=None,
+        stream_output=None, enable_caching=None, async_output=None, num_async=None, stream_map=None,
+        prompt_type=None, prompt_dict=None, chat_template=None, system_prompt=None,
         temperature=None, top_p=None, top_k=None, penalty_alpha=None, num_beams=None,
         max_new_tokens=None, min_new_tokens=None, early_stopping=None, max_time=None, repetition_penalty=None,
         num_return_sequences=None, do_sample=None, seed=None, chat=None,
@@ -44,6 +50,8 @@ def run_cli(  # for local function:
         top_k_docs=None, chunk=None, chunk_size=None,
         pre_prompt_query=None, prompt_query=None,
         pre_prompt_summary=None, prompt_summary=None, hyde_llm_prompt=None,
+        all_docs_start_prompt=None,
+        all_docs_finish_prompt=None,
 
         user_prompt_for_fake_system_prompt=None,
         json_object_prompt=None,
@@ -51,6 +59,10 @@ def run_cli(  # for local function:
         json_code_prompt=None,
         json_code_prompt_if_no_schema=None,
         json_schema_instruction=None,
+        json_preserve_system_prompt=None,
+        json_object_post_prompt_reminder=None,
+        json_code_post_prompt_reminder=None,
+        json_code2_post_prompt_reminder=None,
 
         image_audio_loaders=None,
         pdf_loaders=None,
@@ -102,6 +114,8 @@ def run_cli(  # for local function:
         guided_choice=None,
         guided_grammar=None,
         guided_whitespace_pattern=None,
+
+        client_metadata=None,
 
         # for evaluate kwargs
         captions_model=None,

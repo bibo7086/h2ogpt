@@ -94,6 +94,7 @@ python -m vllm.entrypoints.openai.api_server \
 for choice of port, IP,  model, some number of GPUs matching tensor-parallel-size, etc.  Or with docker with built-in vLLM:
 ```bash
 mkdir -p $HOME/.cache/huggingface/hub
+mkdir -p $HOME/.cache/huggingface/modules/
 mkdir -p $HOME/.triton/cache/
 mkdir -p $HOME/.config/vllm
 docker run -d \
@@ -103,7 +104,10 @@ docker run -d \
     -p 5000:5000 \
     -e NCCL_IGNORE_DISABLED_P2P=1 \
     -e HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN \
+    -e VLLM_NO_USAGE_STATS=1 \
     -e VLLM_NCCL_SO_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/nccl/lib/libnccl.so.2 \
+    -e DO_NOT_TRACK=1 \
+    -e NUMBA_CACHE_DIR=/tmp/ \
     -v /etc/passwd:/etc/passwd:ro \
     -v /etc/group:/etc/group:ro \
     -u `id -u`:`id -g` \

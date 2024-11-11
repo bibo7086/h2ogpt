@@ -48,12 +48,12 @@ import markdown  # pip install markdown
 import pytest
 from bs4 import BeautifulSoup  # pip install beautifulsoup4
 
-from src.utils import is_gradio_version4
+from utils import is_gradio_version4
 
 try:
     from enums import DocumentSubset, LangChainAction
 except:
-    from src.enums import DocumentSubset, LangChainAction
+    from enums import DocumentSubset, LangChainAction
 
 from tests.utils import get_inf_server
 
@@ -71,7 +71,9 @@ def get_client(serialize=not is_gradio_version4):
     return client
 
 
-def get_args(prompt, prompt_type=None, chat=False, stream_output=False,
+def get_args(prompt, prompt_type=None, chat=False,
+             stream_output=False,
+             enable_caching=False,
              max_new_tokens=50,
              top_k_docs=3,
              langchain_mode='Disabled',
@@ -79,10 +81,15 @@ def get_args(prompt, prompt_type=None, chat=False, stream_output=False,
              langchain_action=LangChainAction.QUERY.value,
              langchain_agents=[],
              prompt_dict=None,
+             chat_template=None,
              version=None,
              h2ogpt_key=None,
              visible_models=None,
              visible_image_models=None,
+             image_size=None,
+             image_quality=None,
+             image_guidance_scale=None,
+             image_num_inference_steps=None,
              system_prompt='',  # default of no system prompt triggered by empty string
              add_search_to_context=False,
              chat_conversation=None,
@@ -92,7 +99,7 @@ def get_args(prompt, prompt_type=None, chat=False, stream_output=False,
              document_source_substrings_op='and',
              document_content_substrings=[],
              document_content_substrings_op='and',
-             max_time=20,  # nominally want test to complete, not exercise timeout code (llama.cpp gets stuck behind file lock if prior generation is still going)
+             max_time=40,  # nominally want test to complete, not exercise timeout code (llama.cpp gets stuck behind file lock if prior generation is still going)
              repetition_penalty=1.0,
              do_sample=True,
              seed=0,
@@ -105,8 +112,10 @@ def get_args(prompt, prompt_type=None, chat=False, stream_output=False,
                          # streaming output is supported, loops over and outputs each generation in streaming mode
                          # but leave stream_output=False for simple input/output mode
                          stream_output=stream_output,
+                         enable_caching=enable_caching,
                          prompt_type=prompt_type,
                          prompt_dict=prompt_dict,
+                         chat_template=chat_template,
                          temperature=0.1,
                          top_p=1.0,
                          top_k=40,
@@ -141,6 +150,8 @@ def get_args(prompt, prompt_type=None, chat=False, stream_output=False,
                          pre_prompt_summary=None,
                          prompt_summary=None,
                          hyde_llm_prompt=None,
+                         all_docs_start_prompt=None,
+                         all_docs_finish_prompt=None,
 
                          user_prompt_for_fake_system_prompt=None,
                          json_object_prompt=None,
@@ -148,6 +159,10 @@ def get_args(prompt, prompt_type=None, chat=False, stream_output=False,
                          json_code_prompt=None,
                          json_code_prompt_if_no_schema=None,
                          json_schema_instruction=None,
+                         json_preserve_system_prompt=None,
+                         json_object_post_prompt_reminder=None,
+                         json_code_post_prompt_reminder=None,
+                         json_code2_post_prompt_reminder=None,
 
                          system_prompt=system_prompt,
                          image_audio_loaders=None,
@@ -158,6 +173,10 @@ def get_args(prompt, prompt_type=None, chat=False, stream_output=False,
                          llava_prompt=None,
                          visible_models=visible_models,
                          visible_image_models=visible_image_models,
+                         image_size=image_size,
+                         image_quality=image_quality,
+                         image_guidance_scale=image_guidance_scale,
+                         image_num_inference_steps=image_num_inference_steps,
                          h2ogpt_key=h2ogpt_key,
                          add_search_to_context=add_search_to_context,
                          chat_conversation=chat_conversation,
@@ -199,10 +218,13 @@ def get_args(prompt, prompt_type=None, chat=False, stream_output=False,
                          guided_grammar=None,
                          guided_whitespace_pattern=None,
 
+                         model_lock=None,
+                         client_metadata=None,
                          )
     diff = 0
     from evaluate_params import eval_func_param_names
     assert len(set(eval_func_param_names).difference(set(list(kwargs.keys())))) == diff
+    assert eval_func_param_names == list(kwargs.keys())
     if chat:
         # add chatbot output on end.  Assumes serialize=False
         kwargs.update(dict(chatbot=[]))
@@ -428,7 +450,7 @@ def run_client_chat(prompt='',
                     langchain_mode='Disabled',
                     langchain_action=LangChainAction.QUERY.value,
                     langchain_agents=[],
-                    prompt_type=None, prompt_dict=None,
+                    prompt_type=None, prompt_dict=None, chat_template=None,
                     version=None,
                     h2ogpt_key=None,
                     chat_conversation=None,
@@ -452,6 +474,7 @@ def run_client_chat(prompt='',
                             langchain_action=langchain_action,
                             langchain_agents=langchain_agents,
                             prompt_dict=prompt_dict,
+                            chat_template=chat_template,
                             version=version,
                             h2ogpt_key=h2ogpt_key,
                             chat_conversation=chat_conversation,

@@ -5,7 +5,7 @@ import traceback
 import numpy as np
 from pydub import AudioSegment
 
-from src.utils import get_device
+from utils import get_device
 
 
 def get_transcriber(model="openai/whisper-base.en", use_gpu=True, gpu_id='auto'):
@@ -74,7 +74,10 @@ def transcribe(audio_state1, new_chunk, transcriber=None, max_chunks=None, sst_f
     else:
         # stereo to mono if needed
         if len(y.shape) > 1:
-            y = np.mean(y, axis=0)
+            if y.shape[0] == 2:
+                y = np.mean(y, axis=0)
+            else:
+                y = np.mean(y, axis=1)
         avg = np.average(np.abs(y))
     if not np.isfinite(avg):
         avg = 0.0

@@ -1,18 +1,22 @@
+import ast
 import functools
 import json
 import os
 import sys
 import tempfile
 import time
+import typing
 import uuid
 
 import pytest
 
-from src.vision.utils_vision import process_file_list
 from tests.utils import wrap_test_forked
+from src.prompter_utils import base64_encode_jinja_template, base64_decode_jinja_template
+from src.vision.utils_vision import process_file_list
 from src.utils import get_list_or_str, read_popen_pipes, get_token_count, reverse_ucurve_list, undo_reverse_ucurve_list, \
     is_uuid4, has_starting_code_block, extract_code_block_content, looks_like_json, get_json, is_full_git_hash, \
-    deduplicate_names, handle_json, check_input_type, start_faulthandler
+    deduplicate_names, handle_json, check_input_type, start_faulthandler, remove, get_gradio_depth, create_typed_dict, \
+    execute_cmd_stream
 from src.enums import invalid_json_str, user_prompt_for_fake_system_prompt0
 from src.prompter import apply_chat_template
 import subprocess as sp
@@ -29,9 +33,11 @@ def test_get_list_or_str():
 
 @wrap_test_forked
 def test_stream_popen1():
-    cmd_python = sys.executable + " -i -q -u"
-    cmd = cmd_python + " -c print('hi')"
-    # cmd = cmd.split(' ')
+    cmd_python = sys.executable
+    python_args = "-q -u"
+    python_code = "print('hi')"
+
+    cmd = f"{cmd_python} {python_args} -c \"{python_code}\""
 
     with sp.Popen(cmd, stdout=sp.PIPE, stderr=sp.PIPE, text=True, shell=True) as p:
         for out_line, err_line in read_popen_pipes(p):
@@ -53,11 +59,102 @@ done
 """
     with open('pieces.sh', 'wt') as f:
         f.write(script)
+    os.chmod('pieces.sh', 0o755)
     with sp.Popen(["./pieces.sh"], stdout=sp.PIPE, stderr=sp.PIPE, text=True, shell=True) as p:
         for out_line, err_line in read_popen_pipes(p):
             print(out_line, end='')
             print(err_line, end='')
         p.poll()
+
+
+@wrap_test_forked
+def test_stream_python_execution(capsys):
+    script = """
+import sys
+import time
+for i in range(3):
+    print(f"This message goes to stdout {i}")
+    time.sleep(0.1)
+    print(f"This message goes to stderr {i}", file=sys.stderr)
+    time.sleep(0.1)
+"""
+
+    result = execute_cmd_stream(
+        script_content=script,
+        cwd=None,
+        env=None,
+        timeout=5,
+        capture_output=True,
+        text=True,
+        print_tags=True,
+        print_literal=False,
+    )
+
+    # Capture the printed output
+    captured = capsys.readouterr()
+
+    # Print the captured output for verification
+    print("Captured output:")
+    print(captured.out)
+
+    # Check return code
+    assert result.returncode == 0, f"Expected return code 0, but got {result.returncode}"
+
+    # Check stdout content
+    expected_stdout = "This message goes to stdout 0\nThis message goes to stdout 1\nThis message goes to stdout 2\n"
+    assert expected_stdout in result.stdout, f"Expected stdout to contain:\n{expected_stdout}\nBut got:\n{result.stdout}"
+
+    # Check stderr content
+    expected_stderr = "This message goes to stderr 0\nThis message goes to stderr 1\nThis message goes to stderr 2\n"
+    assert expected_stderr in result.stderr, f"Expected stderr to contain:\n{expected_stderr}\nBut got:\n{result.stderr}"
+
+    # Check if the output was streamed (should appear in captured output)
+    assert "STDOUT: This message goes to stdout 0" in captured.out, "Streaming output not detected in stdout"
+    assert "STDERR: This message goes to stderr 0" in captured.out, "Streaming output not detected in stderr"
+
+    print("All tests passed successfully!")
+
+
+def test_stream_python_execution_empty_lines(capsys):
+    script = """
+import sys
+import time
+print()
+print("Hello")
+print()
+print("World", file=sys.stderr)
+print()
+"""
+
+    result = execute_cmd_stream(
+        script_content=script,
+        cwd=None,
+        env=None,
+        timeout=5,
+        capture_output=True,
+        text=True
+    )
+
+    captured = capsys.readouterr()
+
+    print("Captured output:")
+    print(captured.out)
+
+    # Check that we only see STDOUT and STDERR for non-empty lines
+    assert captured.out.count("STDOUT:") == 1, "Expected only one STDOUT line"
+    assert captured.out.count("STDERR:") == 1, "Expected only one STDERR line"
+    assert "STDOUT: Hello" in captured.out, "Expected 'Hello' in stdout"
+    assert "STDERR: World" in captured.out, "Expected 'World' in stderr"
+
+    print("All tests passed successfully!")
+
+
+@wrap_test_forked
+def test_memory_limit():
+    result = execute_cmd_stream(cmd=['python', './tests/memory_hog_script.py'], max_memory_usage=500_000_000)
+    assert result.returncode == -15
+    print(result.stdout, file=sys.stderr, flush=True)
+    print(result.stderr, file=sys.stderr, flush=True)
 
 
 @pytest.mark.parametrize("text_context_list",
@@ -137,7 +234,7 @@ def test_limited_prompt(instruction, chat_conversation, iinput, context, system_
         num_prompt_tokens, max_new_tokens, \
         num_prompt_tokens0, num_prompt_tokens_actual, \
         history_to_use_final, external_handle_chat_conversation, \
-        top_k_docs_trial, one_doc_size, truncation_generation, system_prompt = \
+        top_k_docs_trial, one_doc_size, truncation_generation, system_prompt, _, _ = \
         get_limited_prompt(instruction, iinput, tokenizer,
                            prompter=prompter,
                            max_new_tokens=max_new_tokens,
@@ -249,6 +346,41 @@ def test_chat_template():
         assert instruction in prompt
         assert history_to_use[0][0] in prompt
         assert history_to_use[0][1] in prompt
+
+
+@wrap_test_forked
+def test_chat_template_images():
+    history_to_use = [('Are you awesome?', "Yes I'm awesome.")]
+    base_model = 'OpenGVLab/InternVL-Chat-V1-5'
+
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
+
+    messages = [{'role': 'system',
+                 'content': 'You are h2oGPTe, an expert question-answering AI system created by H2O.ai that performs like GPT-4 by OpenAI.'},
+                {'role': 'user',
+                 'content': 'What is the name of the tower in one of the images?'}]
+    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    assert prompt is not None
+
+    (instruction, system_prompt, chat_conversation, image_file,
+     user_prompt_for_fake_system_prompt,
+     test_only, verbose) = ('What is the name of the tower in one of the images?',
+                            'You are h2oGPTe, an expert question-answering AI system created by H2O.ai that performs like GPT-4 by OpenAI.',
+                            [], ['/tmp/image_file_0f5f011d-c907-4836-9f38-0ba579b45ffc.jpeg',
+                                 '/tmp/image_file_60dce245-af39-4f8c-9651-df9ae0bd0afa.jpeg',
+                                 '/tmp/image_file_e0b32625-9de3-40d7-98fb-c2e6368d6d73.jpeg'], None, False, False)
+
+    prompt = apply_chat_template(instruction, system_prompt, history_to_use, image_file,
+                                 tokenizer,
+                                 user_prompt_for_fake_system_prompt=user_prompt_for_fake_system_prompt0,
+                                 test_only=test_only,
+                                 verbose=verbose)
+
+    assert 'h2oGPTe' in prompt  # put into pre-conversation if no actual system prompt
+    assert instruction in prompt
+    assert history_to_use[0][0] in prompt
+    assert history_to_use[0][1] in prompt
 
 
 @wrap_test_forked
@@ -727,11 +859,11 @@ def test_json_repair_more():
     ```
     This will display the JSON code block with proper formatting and highlighting.
     """
-    from json_repair import repair_json
-    from src.utils import get_json
+    # from json_repair import repair_json
+    from src.utils import get_json, repair_json_by_type
     import json
 
-    response = repair_json(response0)
+    response = repair_json_by_type(response0)
     assert json.loads(response)['employee_id'] == 1234
     print(response)
 
@@ -835,6 +967,19 @@ def test_handle_json_no_schema():
     assert handle_json(no_schema_json) == no_schema_json
 
 
+def test_json_repair_on_string():
+    from json_repair import repair_json
+    response0 = 'According to the information provided, the best safety assessment enum label is "Safe".'
+
+    json_schema_type = 'object'
+    response = get_json(response0, json_schema_type=json_schema_type)
+    response = json.loads(response)
+    assert isinstance(response, dict) and not response
+
+    response = repair_json(response0)
+    assert isinstance(response, str) and response in ['""', """''""", '', None]
+
+
 # Example usage converted to pytest test cases
 def test_check_input_type():
     # Valid URL
@@ -887,7 +1032,8 @@ def test_process_file_list():
     for file in processed_files:
         print(file, file=sys.stderr)
         assert os.path.isfile(file)
-    assert len(processed_files) == len(test_files) - 1 + 17  # 17 is the number of images generated from the video file
+    assert len(processed_files) == len(
+        test_files) - 1 + 17 + 4  # 17 is the number of images generated from the video file
 
 
 def test_process_file_list_extract_frames():
@@ -1003,7 +1149,8 @@ def test_process_animated_gif3():
     for file in processed_files:
         print(file, file=sys.stderr)
         assert os.path.isfile(file)
-    assert len(processed_files) == len(test_files) - 1 + 60  # 60 is the number of images generated from the animated gif
+    assert len(processed_files) == len(
+        test_files) - 1 + 60  # 60 is the number of images generated from the animated gif
 
 
 def test_process_mixed():
@@ -1028,3 +1175,369 @@ def test_process_mixed():
         print(file, file=sys.stderr)
         assert os.path.isfile(file)
     assert len(processed_files) == len(test_files) - 1 + 29  # 28 is the number of images generated from the video files
+
+
+def test_update_db():
+    auth_filename = "test.db"
+    remove(auth_filename)
+    from src.db_utils import fetch_user
+    assert fetch_user(auth_filename, '', verbose=True) == {}
+
+    username = "jon"
+    updates = {
+        "selection_docs_state": {
+            "langchain_modes": ["NewMode1"],
+            "langchain_mode_paths": {"NewMode1": "new_mode_path1"},
+            "langchain_mode_types": {"NewMode1": "shared"}
+        }
+    }
+    from src.db_utils import append_to_user_data
+    append_to_user_data(auth_filename, username, updates, verbose=True)
+
+    auth_dict = fetch_user(auth_filename, username, verbose=True)
+
+    assert auth_dict == {'jon': {'selection_docs_state': {'langchain_mode_paths': {'NewMode1': 'new_mode_path1'},
+                                                          'langchain_mode_types': {'NewMode1': 'shared'},
+                                                          'langchain_modes': ['NewMode1']}}}
+
+    updates = {
+        "selection_docs_state": {
+            "langchain_modes": ["NewMode"],
+            "langchain_mode_paths": {"NewMode": "new_mode_path"},
+            "langchain_mode_types": {"NewMode": "shared"}
+        }
+    }
+    from src.db_utils import append_to_users_data
+    append_to_users_data(auth_filename, updates, verbose=True)
+
+    auth_dict = fetch_user(auth_filename, username, verbose=True)
+    assert auth_dict == {'jon': {'selection_docs_state':
+                                     {'langchain_mode_paths': {'NewMode1': 'new_mode_path1',
+                                                               "NewMode": "new_mode_path"},
+                                      'langchain_mode_types': {'NewMode1': 'shared', "NewMode": "shared"},
+                                      'langchain_modes': ['NewMode1', 'NewMode']}}}
+
+
+def test_encode_chat_template():
+    jinja_template = """
+{{ bos_token }}
+{%- if messages[0]['role'] == 'system' -%}
+    {% set system_message = messages[0]['content'].strip() %}
+    {% set loop_messages = messages[1:] %}
+{%- else -%}
+    {% set system_message = 'This is a chat between a user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user\'s questions based on the context. The assistant should also indicate when the answer cannot be found in the context.' %}
+    {% set loop_messages = messages %}
+{%- endif -%}
+
+System: {{ system_message }}
+
+{% for message in loop_messages %}
+    {%- if message['role'] == 'user' -%}
+        User: {{ message['content'].strip() + '\n' }}
+    {%- else -%}
+        Assistant: {{ message['content'].strip() + '\n' }}
+    {%- endif %}
+    {% if loop.last and message['role'] == 'user' %}
+        Assistant:
+    {% endif %}
+{% endfor %}
+"""
+
+    encoded_template = base64_encode_jinja_template(jinja_template)
+    print("\nEncoded Template:", encoded_template)
+
+    model_lock_option = f"""--model_lock="[{{'inference_server': 'vllm_chat:149.130.210.116', 'base_model': 'nvidia/Llama3-ChatQA-1.5-70B', 'visible_models': 'nvidia/Llama3-ChatQA-1.5-70B', 'h2ogpt_key': '62224bfb-c832-4452-81e7-8a4bdabbe164', 'chat_template': '{encoded_template}'}}]"
+"""
+
+    print("Command-Line Option:")
+    print(model_lock_option)
+
+    # Example of decoding back from the command-line option
+    command_line_option = model_lock_option.strip('--model_lock=')
+    # double ast.literal_eval due to quoted quote for model_lock_option
+    parsed_model_lock_option = ast.literal_eval(ast.literal_eval(command_line_option))
+
+    encoded_template_from_option = parsed_model_lock_option[0]['chat_template']
+    decoded_template = base64_decode_jinja_template(encoded_template_from_option)
+
+    print("Decoded Template:")
+    print(decoded_template)
+
+    assert jinja_template == decoded_template
+
+
+def test_depth():
+    example_list = [[['Dog', ['/tmp/gradio/image_Dog_d2b19221_6f70_4987_bda8_09be952eae93.png']],
+                     ['Who are you?', ['/tmp/gradio/image_Wh_480bd8318d01b570b61e77a9306aef87_c41f.png']],
+                     ['Who ar eyou?',
+                      "I apologize for the confusion earlier!\n\nI am LLaMA, an AI assistant developed by Meta AI that can understand and respond to human input in a conversational manner. I'm not a human, but a computer program designed to simulate conversation, answer questions, and even generate text based on the input I receive.\n\nI can assist with a wide range of topics, from general knowledge to entertainment, and even create stories or dialogues. I'm constantly learning and improving my responses based on the interactions I have with users like you.\n\nSo, feel free to ask me anything, and I'll do my best to help!"]],
+                    [], [], [], [], [], [], [], [], [], [], []]
+    assert get_gradio_depth(example_list) == 3
+
+    example_list = [[[['Dog'], ['/tmp/gradio/image_Dog_d2b19221_6f70_4987_bda8_09be952eae93.png']],
+                     ['Who are you?', ['/tmp/gradio/image_Wh_480bd8318d01b570b61e77a9306aef87_c41f.png']],
+                     ['Who ar eyou?',
+                      "I apologize for the confusion earlier!\n\nI am LLaMA, an AI assistant developed by Meta AI that can understand and respond to human input in a conversational manner. I'm not a human, but a computer program designed to simulate conversation, answer questions, and even generate text based on the input I receive.\n\nI can assist with a wide range of topics, from general knowledge to entertainment, and even create stories or dialogues. I'm constantly learning and improving my responses based on the interactions I have with users like you.\n\nSo, feel free to ask me anything, and I'll do my best to help!"]],
+                    [], [], [], [], [], [], [], [], [], [], []]
+    assert get_gradio_depth(example_list) == 3
+
+    example_list = [[['Dog', "Bad Dog"], ['Who are you?', "Image"], ['Who ar eyou?',
+                                                                     "I apologize for the confusion earlier!\n\nI am LLaMA, an AI assistant developed by Meta AI that can understand and respond to human input in a conversational manner. I'm not a human, but a computer program designed to simulate conversation, answer questions, and even generate text based on the input I receive.\n\nI can assist with a wide range of topics, from general knowledge to entertainment, and even create stories or dialogues. I'm constantly learning and improving my responses based on the interactions I have with users like you.\n\nSo, feel free to ask me anything, and I'll do my best to help!"]],
+                    [], [], [], [], [], [], [], [], [], [], []]
+    assert get_gradio_depth(example_list) == 3
+
+    example_list = [[[['Dog', "Bad Dog"], ['Who are you?', "Image"], ['Who ar eyou?',
+                                                                      "I apologize for the confusion earlier!\n\nI am LLaMA, an AI assistant developed by Meta AI that can understand and respond to human input in a conversational manner. I'm not a human, but a computer program designed to simulate conversation, answer questions, and even generate text based on the input I receive.\n\nI can assist with a wide range of topics, from general knowledge to entertainment, and even create stories or dialogues. I'm constantly learning and improving my responses based on the interactions I have with users like you.\n\nSo, feel free to ask me anything, and I'll do my best to help!"]],
+                     [], [], [], [], [], [], [], [], [], [], []]]
+    assert get_gradio_depth(example_list) == 4
+
+    example_list = [['Dog', "Bad Dog"], ['Who are you?', "Image"]]
+    assert get_gradio_depth(example_list) == 2
+
+    # more cases
+    example_list = []
+    assert get_gradio_depth(example_list) == 0
+
+    example_list = [1, 2, 3]
+    assert get_gradio_depth(example_list) == 1
+
+    example_list = [[1], [2], [3]]
+    assert get_gradio_depth(example_list) == 1
+
+    example_list = [[[1]], [[2]], [[3]]]
+    assert get_gradio_depth(example_list) == 2
+
+    example_list = [[[[1]]], [[[2]]], [[[3]]]]
+    assert get_gradio_depth(example_list) == 3
+
+    example_list = [[[[[1]]]], [[[[2]]]], [[[[3]]]]]
+    assert get_gradio_depth(example_list) == 4
+
+    example_list = [[], [1], [2, [3]], [[[4]]]]
+    assert get_gradio_depth(example_list) == 3
+
+    example_list = [[], [[[[1]]]], [2, [3]], [[[4]]]]
+    assert get_gradio_depth(example_list) == 4
+
+    example_list = [[], [[[[[1]]]]], [2, [3]], [[[4]]]]
+    assert get_gradio_depth(example_list) == 5
+
+    example_list = [[[[[1]]]], [[[[2]]]], [[[3]]], [[4]], [5]]
+    assert get_gradio_depth(example_list) == 4
+
+    example_list = [[[[[1]]]], [[[[2]]]], [[[3]]], [[4]], [5], []]
+    assert get_gradio_depth(example_list) == 4
+
+
+def test_schema_to_typed():
+    TEST_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "age": {"type": "integer"},
+            "skills": {
+                "type": "array",
+                "items": {"type": "string", "maxLength": 10},
+                "minItems": 3
+            },
+            "work history": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "company": {"type": "string"},
+                        "duration": {"type": "string"},
+                        "position": {"type": "string"}
+                    },
+                    "required": ["company", "position"]
+                }
+            }
+        },
+        "required": ["name", "age", "skills", "work history"]
+    }
+
+    Schema = create_typed_dict(TEST_SCHEMA)
+
+    # Example usage of the generated TypedDict
+    person: Schema = {
+        "name": "John Doe",
+        "age": 30,
+        "skills": ["Python", "TypeScript", "Docker"],
+        "work history": [
+            {"company": "TechCorp", "position": "Developer", "duration": "2 years"},
+            {"company": "DataInc", "position": "Data Scientist"}
+        ]
+    }
+
+    print(person)
+
+
+def test_genai_schema():
+    # Usage example
+    TEST_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "age": {"type": "integer"},
+            "skills": {
+                "type": "array",
+                "items": {"type": "string", "maxLength": 10},
+                "minItems": 3
+            },
+            "work history": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "company": {"type": "string"},
+                        "duration": {"type": "string"},
+                        "position": {"type": "string"}
+                    },
+                    "required": ["company", "position"]
+                }
+            },
+            "status": {
+                "type": "string",
+                "enum": ["active", "inactive", "on leave"]
+            }
+        },
+        "required": ["name", "age", "skills", "work history", "status"]
+    }
+
+    from src.utils_langchain import convert_to_genai_schema
+    genai_schema = convert_to_genai_schema(TEST_SCHEMA)
+
+    # Print the schema (this will show the structure, but not all details)
+    print(genai_schema)
+
+    # You can now use this schema with the Gemini API
+    # For example:
+    # response = model.generate_content(prompt, response_schema=genai_schema)
+
+
+def test_genai_schema_more():
+    # Test cases
+    TEST_SCHEMAS = [
+        # Object schema
+        {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "The person's name"},
+                "age": {"type": "integer", "description": "The person's age"},
+                "height": {"type": "number", "format": "float", "description": "Height in meters"},
+                "is_student": {"type": "boolean", "description": "Whether the person is a student"},
+                "skills": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of skills"
+                },
+                "address": {
+                    "type": "object",
+                    "properties": {
+                        "street": {"type": "string"},
+                        "city": {"type": "string"},
+                        "country": {"type": "string"}
+                    },
+                    "required": ["street", "city"],
+                    "description": "Address details"
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "inactive", "on leave"],
+                    "description": "Current status"
+                }
+            },
+            "required": ["name", "age", "is_student"],
+            "description": "A person's profile"
+        },
+        # Array schema
+        {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer"},
+                    "name": {"type": "string"}
+                },
+                "required": ["id"]
+            },
+            "description": "List of items"
+        },
+        # String schema
+        {
+            "type": "string",
+            "format": "email",
+            "description": "Email address"
+        },
+        # Number schema
+        {
+            "type": "number",
+            "format": "double",
+            "description": "A floating-point number"
+        },
+        # Boolean schema
+        {
+            "type": "boolean",
+            "description": "A true/false value"
+        }
+    ]
+
+    from src.utils_langchain import convert_to_genai_schema
+
+    # Test the conversion
+    for i, schema in enumerate(TEST_SCHEMAS, 1):
+        print(f"\nTest Schema {i}:")
+        genai_schema = convert_to_genai_schema(schema)
+        print(genai_schema)
+
+
+def test_pymupdf4llm():
+    from langchain_community.document_loaders import PyMuPDFLoader
+    from src.utils_langchain import PyMuPDF4LLMLoader
+
+    times_pymupdf = []
+    times_pymupdf4llm = []
+    files = [os.path.join('tests', x) for x in os.listdir('tests')]
+    files += [os.path.join('/home/jon/Downloads/', x) for x in os.listdir('/home/jon/Downloads/')]
+    files = ['/home/jon/Downloads/Tabasco_Ingredients_Products_Guide.pdf']
+    for file in files:
+        if not file.endswith('.pdf'):
+            continue
+
+        t0 = time.time()
+        doc = PyMuPDFLoader(file).load()
+        assert doc is not None
+        print('pymupdf: %s %s %s' % (file, len(doc), time.time() - t0))
+        times_pymupdf.append((time.time() - t0)/len(doc))
+        for page in doc:
+            print(page)
+
+        t0 = time.time()
+        doc = PyMuPDF4LLMLoader(file).load()
+        assert doc is not None
+        print('pymupdf4llm: %s %s %s' % (file, len(doc), time.time() - t0))
+        times_pymupdf4llm.append((time.time() - t0)/len(doc))
+        for page in doc:
+            print(page)
+
+        if len(times_pymupdf) > 30:
+            break
+
+    print("pymupdf stats:")
+    compute_stats(times_pymupdf)
+
+    print("pymupdf4llm stats:")
+    compute_stats(times_pymupdf4llm)
+
+
+def compute_stats(times_in_seconds):
+
+    # Compute statistics
+    min_time = min(times_in_seconds)
+    max_time = max(times_in_seconds)
+    average_time = sum(times_in_seconds) / len(times_in_seconds)
+
+    # Print the results
+    print(f"Min time: {min_time} seconds")
+    print(f"Max time: {max_time} seconds")
+    print(f"Average time: {average_time} seconds")
